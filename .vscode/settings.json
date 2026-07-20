@@ -1,8 +1,5 @@
 {
     "files.associations": {
-        "*.asm": "ca65",
-        "*.s": "ca65",
-        "*.inc": "ca65",
         "*.prg": "binary"
     },
     "editor.tabSize": 8,
@@ -10,5 +7,6 @@
     "files.exclude": {
         "**/*.o": true,
         "**/*.lst": false
-    }
+    },
+    "vs64.viceExecutable": "/opt/homebrew/bin/x64sc"
 }

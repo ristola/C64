@@ -2,59 +2,38 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Assemble",
-            "type": "shell",
-            "command": "64tass --cbm-prg -Wall -o '${fileBasenameNoExtension}.prg' -L '${fileBasenameNoExtension}.lst' '${file}'",
-            "options": {
-                "cwd": "${fileDirname}"
-            },
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared",
-                "clear": true
-            },
-            "problemMatcher": {
-                "owner": "64tass",
-                "fileLocation": ["relative", "${fileDirname}"],
-                "pattern": {
-                    "regexp": "^(.+?):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
-                    "file": 1,
-                    "line": 2,
-                    "column": 3,
-                    "severity": 4,
-                    "message": 5
-                }
-            }
+            "type": "vs64",
+            "action": "build",
+            "group": "build",
+            "label": "build project"
         },
         {
-            "label": "Assemble & Run in VICE",
+            "label": "Build Cartridge Image",
             "type": "shell",
-            "command": "64tass --cbm-prg -Wall -o '${fileBasenameNoExtension}.prg' -L '${fileBasenameNoExtension}.lst' '${file}' && x64sc -autostart '${fileBasenameNoExtension}.prg'",
+            "command": "mkdir -p '${workspaceFolder}/build' && acme -f plain -o '${workspaceFolder}/build/hello_cart.bin' hello_cart.asm && cartconv -t normal -i '${workspaceFolder}/build/hello_cart.bin' -o '${workspaceFolder}/build/hello.crt' -l 0x8000 -n HELLO -p -q",
             "options": {
-                "cwd": "${fileDirname}"
+                "cwd": "${workspaceFolder}/hello"
             },
             "group": "build",
             "presentation": {
                 "reveal": "always",
                 "panel": "shared",
-                "clear": true
+                "clear": false
             },
-            "problemMatcher": {
-                "owner": "64tass",
-                "fileLocation": ["relative", "${fileDirname}"],
-                "pattern": {
-                    "regexp": "^(.+?):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
-                    "file": 1,
-                    "line": 2,
-                    "column": 3,
-                    "severity": 4,
-                    "message": 5
-                }
-            }
+            "problemMatcher": []
+        },
+        {
+            "label": "Build All",
+            "dependsOn": [
+                "build project",
+                "Build Cartridge Image"
+            ],
+            "dependsOrder": "sequence",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": []
         }
     ]
 }

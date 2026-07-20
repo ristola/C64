@@ -1,0 +1,11 @@
+{
+    "name": "hello",
+    "description": "C64 Hello World with splash screen",
+    "toolkit": "acme",
+    "main": "hello/hello.asm",
+    "build": "debug",
+    "definitions": [],
+    "includes": ["hello"],
+    "args": [],
+    "compiler": ""
+}

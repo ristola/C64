@@ -1,3 +1,5 @@
 *.prg
 *.lst
 *.o
+*.report
+/build/
