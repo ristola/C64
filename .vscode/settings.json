@@ -9,6 +9,6 @@
     "editor.insertSpaces": false,
     "files.exclude": {
         "**/*.o": true,
-        "**/*.lst": true
+        "**/*.lst": false
     }
 }
