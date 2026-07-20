@@ -1,0 +1,14 @@
+{
+    "files.associations": {
+        "*.asm": "ca65",
+        "*.s": "ca65",
+        "*.inc": "ca65",
+        "*.prg": "binary"
+    },
+    "editor.tabSize": 8,
+    "editor.insertSpaces": false,
+    "files.exclude": {
+        "**/*.o": true,
+        "**/*.lst": true
+    }
+}
