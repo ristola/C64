@@ -10,7 +10,7 @@
         {
             "label": "Build Cartridge Image",
             "type": "shell",
-            "command": "mkdir -p '${workspaceFolder}/build' && acme -f plain -o '${workspaceFolder}/build/hello_cart.bin' hello_cart.asm && cartconv -t normal -i '${workspaceFolder}/build/hello_cart.bin' -o '${workspaceFolder}/build/hello.crt' -l 0x8000 -n HELLO -p -q",
+            "command": "./build_cart.sh",
             "options": {
                 "cwd": "${workspaceFolder}/hello"
             },
