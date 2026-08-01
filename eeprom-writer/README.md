@@ -18,4 +18,4 @@ Load a 27CXX-family ROM binary (e.g. dumped by `../eprom-reader/`, or from any o
 
 ## Relationship to other projects in this workspace
 
-Downstream of `../eprom-reader/` (reads an existing chip) and useful for `../hello/` (the SHACKMATE cartridge project) — e.g. burning a built cartridge image onto a real EEPROM for hardware bring-up before the custom AM29F040B-based board exists, or for socket-based (non-soldered) iteration during Phase 1 hardware bring-up.
+Downstream of `../eprom-reader/` (reads an existing chip) and useful for `../hello/` (the SHACKMATE cartridge project) — e.g. burning a built cartridge image onto a real EEPROM for hardware bring-up before the custom AM29F040B-based board exists, or for socket-based (non-soldered) iteration during Phase 1 hardware bring-up. See also `../programmer-cartridge/` — a separate, later-stage concept for a C64-hosted cartridge that combines this project's write capability with reading, backup, cloning, and in-circuit programming of a companion release cartridge; this project stays a narrower, simpler standalone tool rather than merging into that one.

@@ -23,6 +23,21 @@
             "problemMatcher": []
         },
         {
+            "label": "Build Magic Desk Test Image",
+            "type": "shell",
+            "command": "./build_cart_md.sh",
+            "options": {
+                "cwd": "${workspaceFolder}/hello"
+            },
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "Build All",
             "dependsOn": [
                 "build project",

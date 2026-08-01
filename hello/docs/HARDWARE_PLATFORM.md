@@ -15,6 +15,19 @@ Goal: design the hardware once so it can evolve across future revisions (network
 3. Keep the software API stable even if the hardware changes later.
 4. Leave room for future expansion.
 
+## Phase 0: bring-up/test board
+
+Before any Phase 1 hardware exists, an already-owned board can validate the *software* side today: a "Universal C64 Cartridge" (functionally matching, possibly identical to, the open-source [msolajic/c64-uni-cart](https://github.com/msolajic/c64-uni-cart) design). It's a fixed-protocol EPROM/flash cartridge board, not a flexible EasyFlash-style platform, and its behavior was verified against that project's own README/schematic (not guessed):
+
+- **Chip support**: 27C512 (28-pin) through 27C010/020/040/29F010/020/040/27C080 (32-pin), selected via `PIN1`/`PIN31`/`28PIN-32PIN` jumpers per chip family. Directly covers the AM29F040B (in the `29F040` row).
+- **Bank register**: a single 74LS273 8-bit latch at `$DE00`, write-only. No separate control register.
+- **`MODE` jumper — Magic Desk** (board default): bits 0-6 of the byte written to `$DE00` select 1 of up to 128 8KB banks (1MB max). Bit 7 disables the cartridge (forces `/EXROM` high, RAM shows through at `$8000-$9FFF`) — the classic "free RAM after loading" trick. `LOCK` jumper (default `YES`): once bit 7 disables the cart, further `$DE00` writes are ignored until a hardware reset; `LOCK=NO` makes it reversible.
+- **`MODE` jumper — Ocean**: same `$DE00` bank-select, but bit 7 is ignored — no disable feature.
+- **`SIZE`/`GAME` jumpers**: fixed 8K mode (default) or fixed 16K mode (`/GAME` pulled low alongside `/EXROM`, mapping `$A000-$BFFF` too). Unlike EasyFlash or the Phase 1 design, **`GAME`/`EXROM` are hardwired by jumper, not software-latch-controlled** — this board has no Ultimax mode at all.
+- **`MD` jumper + 2× 1N4148 + 10kΩ**: routes `/ROML` and `/ROMH` to the EPROM's `/OE`; the diodes/resistor are only needed when `SIZE=16K`.
+
+**Boot implication**: since this board never enters Ultimax, the KERNAL's real reset vector runs directly and does its own CBM80-autostart check (`$FD02`, verified byte-for-byte against the real KERNAL ROM: `$C3,$C2,$CD,$38,$30` at ROM offset `$8004-$8008`) before jumping into the cartridge — no `romh_boot.asm`-style bridge needed. `hello/bank0_content.asm` already carries that exact signature (it was never EasyFlash-specific), and `$DE00` is already the address `ram_bank_switch` writes to — so a Magic Desk build needed **zero ROM content changes**, only a different packaging step. See `hello/build_cart_md.sh` (`cartconv -t md`) — builds `build/hello_md.crt`, `Hardware ID: 19 (Magic Desk)`, verified `exrom: 0 game: 1 (8k Game)` matching the table below. Not yet tested on the real board.
+
 ## Memory map
 
 ### IO1 (`$DE00`-`$DEFF`) — not used by this project

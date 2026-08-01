@@ -71,7 +71,7 @@ Real BASIC string results (`HEX$`/`DEC$`) use BASIC ROM's own string-descriptor 
 | 6 | CARTRIDGE non-flash (`CARTINFO`/`BANK`/`BANKS`) | Working |
 | 7 | Inline-ASM engine | Not started |
 | 8 | SOUND (`SOUND`/`VOLUME`/`WAVE`/`ADSR`/`FILTER`) | Stub |
-| 9 | CARTRIDGE-flash (`FLASHERASE`/`FLASHLOAD`/`FLASHVERIFY`) | Deliberately stubbed — needs a separately-verified EAPI erase/write sequence |
+| 9 | CARTRIDGE-flash (`FLASHERASE`/`FLASHLOAD`/`FLASHVERIFY`) | Deliberately stubbed — needs a separately-verified EAPI erase/write sequence. Same underlying capability as the `../../programmer-cartridge/` project (concept stage); worth verifying and sharing the sequence once rather than twice. |
 | 10 | DISK (`DIR`/`DEVICE`/`CD`/`DELETE`/`RENAME`/`DLOAD`/`DSAVE`) | Working, KERNAL-verified live in VICE |
 | 11–12 | Reserved for a later SERIAL/DEVELOPMENT plan | Unused |
 
@@ -137,7 +137,10 @@ Testing is done by the user in VICE (via VS64's F5 launch, or a standalone `/App
 ```sh
 cd hello
 ./build_cart.sh        # 13-bank EasyFlash build -> ../build/hello.crt
+./build_cart_md.sh     # Magic Desk build (real-hardware test board) -> ../build/hello_md.crt
 ```
+
+`build_cart_md.sh` produces the exact same bank content, packaged for a Magic Desk-protocol test board instead of EasyFlash — see `HARDWARE_PLATFORM.md`'s "Phase 0" section for why no ROM code differs between the two.
 
 or, for the single-bank cartridge:
 
