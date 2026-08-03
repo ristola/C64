@@ -109,9 +109,21 @@ device_err_msg
         !byte   13,0
 
 ; --- DIR: real "$" directory listing. Loads into dir_buffer (slots.asm)
-; via secondary address 1 with our own target address, NOT secondary 0
-; (which would use the file's embedded address - $0801, clobbering the
-; user's actual BASIC program) - verified live in VICE. Prints "<blocks>
+; via secondary address 0, which per the real (verified, not the
+; earlier wrong assumption here) KERNAL LOAD semantics means "ignore
+; the file's own embedded 2-byte address, use the X/Y address passed to
+; LOAD instead". An earlier version of this used secondary address 1
+; with a comment claiming THAT meant "use our own address" - backwards:
+; SA=1 actually means "use the file's OWN embedded address, ignore X/Y
+; entirely" - which for a "$" directory listing is a fixed spot inside
+; live screen memory ($0401), so the real directory data was landing
+; there instead of dir_buffer (visible as garbled/graphics-looking
+; characters splattered across the screen), while dir_buffer itself
+; was never actually written and dir_entry_loop below was walking
+; whatever uninitialized memory happened to be sitting there - caught
+; live via garbage output ("65535" from print_decimal_word on
+; leftover/uninitialized bytes) once someone actually looked at real
+; output, not just whether the LOAD call errored. Prints "<blocks>
 ; <filename>" one line per entry, including the header line (which
 ; prints as "0 <diskname>"): entries are plain PETSCII text, not real
 ; BASIC tokens, so this just walks dir_buffer linearly using the $00
@@ -131,7 +143,8 @@ DirCmd
         jsr     KERNAL_SETNAM
         lda     #2            ; logical file number
         ldx     disk_device
-        ldy     #1            ; secondary address 1: use OUR address below,
+        ldy     #0            ; secondary address 0: use OUR address below
+                                ; (dir_buffer, via X/Y passed to LOAD),
                                 ; not the file's own embedded one
         jsr     KERNAL_SETLFS
         lda     #0            ; 0 = load (not verify)
@@ -241,10 +254,28 @@ dir_err_msg
 ; basic directly - same style as BankCmd's range-error handling in
 ; bank6_content.asm; never returns to its caller in that case.
 ; Returns: Y = filename length (0 for "").
+; NOTE on the three error exits below: this routine is always entered
+; via "jsr parse_filename", but its error paths jump straight to a
+; shared handler (disk_missing_quote/disk_name_too_long) that ends in
+; "jmp bank_return_basic" instead of RTS-ing back to the caller first -
+; leaving this routine's own JSR return address orphaned on the stack.
+; bank_return_basic's single PLA then pops half of that orphaned
+; address instead of bank_call's real "old bank" byte, writes the
+; garbage to the actual EasyFlash bank register, and jumps into
+; whatever ROM that selects - a JAM. Confirmed live via the identical
+; bug in bank11_content.asm's net_parse_str (same shape, caught when
+; HTTPGET was first tested against real typed input) - this routine
+; was never actually exercised down its error paths before, only the
+; success path ("Working, KERNAL-verified live in VICE" was true of
+; DIR/CD/etc.'s normal operation, not of typing a bare unclosed quote).
+; Fix: PLA twice (discard the orphaned return address) before jumping
+; to the shared handler, restoring the stack to pre-JSR state.
 parse_filename
         jsr     BAS_CHRGOT
         cmp     #CHR_QUOTE
         beq     pf_have_quote
+        pla
+        pla
         jmp     disk_missing_quote
 pf_have_quote
         ldy     #0
@@ -253,9 +284,17 @@ pf_loop
         cmp     #CHR_QUOTE
         beq     pf_close
         cmp     #0
-        beq     disk_missing_quote
+        bne     pf_not_end
+        pla
+        pla
+        jmp     disk_missing_quote
+pf_not_end
         cpy     #FILENAME_MAXLEN
-        bcs     disk_name_too_long
+        bcc     pf_store
+        pla
+        pla
+        jmp     disk_name_too_long
+pf_store
         sta     filename_buf,y
         iny
         jmp     pf_loop
@@ -270,10 +309,13 @@ pf_close
 ; DIR's own comment on reusing $14/$15 - only safe because nothing else
 ; needs it at that moment; parse_filename2 runs during RENAME's own
 ; argument parsing, a different, incompatible window).
+; Same stack-orphaning hazard as parse_filename above - same fix.
 parse_filename2
         jsr     BAS_CHRGOT
         cmp     #CHR_QUOTE
         beq     pf2_have_quote
+        pla
+        pla
         jmp     disk_missing_quote
 pf2_have_quote
         ldy     #0
@@ -282,9 +324,17 @@ pf2_loop
         cmp     #CHR_QUOTE
         beq     pf2_close
         cmp     #0
-        beq     disk_missing_quote
+        bne     pf2_not_end
+        pla
+        pla
+        jmp     disk_missing_quote
+pf2_not_end
         cpy     #FILENAME_MAXLEN
-        bcs     disk_name_too_long
+        bcc     pf2_store
+        pla
+        pla
+        jmp     disk_name_too_long
+pf2_store
         sta     filename2_buf,y
         iny
         jmp     pf2_loop
@@ -506,13 +556,26 @@ DloadCmd
         jsr     KERNAL_SETNAM
         lda     #2            ; logical file number
         ldx     disk_device
-        ldy     #0            ; secondary 0: use the file's own embedded
-                                ; load address (real LOAD semantics)
+        ldy     #1            ; secondary address 1: use the file's own
+                                ; embedded load address (real LOAD
+                                ; semantics) - correction from an earlier
+                                ; version that used 0 here, which per the
+                                ; real KERNAL LOAD contract actually means
+                                ; "ignore the file's address, force X/Y
+                                ; instead" (see DIR's own corrected
+                                ; comment for the verified source and how
+                                ; this exact mixup was first caught).
+                                ; This only worked by coincidence before:
+                                ; X/Y below is $0801, the same address
+                                ; almost every ordinary BASIC program's
+                                ; own embedded header already specifies,
+                                ; so forcing it explicitly happened to
+                                ; match - would have silently broken for
+                                ; any file whose own address isn't $0801.
         jsr     KERNAL_SETLFS
         lda     #0            ; 0 = load
-        ldx     $2b           ; BASIC's own TXTTAB (start-of-program
-        ldy     $2c           ; pointer) - stock LOAD passes this too,
-                                ; confirmed live (X=$01/Y=$08 = $0801)
+        ldx     $2b           ; ignored by the KERNAL with SA=1 above,
+        ldy     $2c           ; but harmless to still pass TXTTAB here
         jsr     KERNAL_LOAD
         bcs     dload_error
         stx     $2d           ; VARTAB low = load's returned end address

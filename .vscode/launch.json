@@ -4,22 +4,16 @@
         {
             "type": "vice",
             "request": "launch",
-            "name": "Launch Vice",
-            "preLaunchTask": "${defaultBuildTask}"
+            "name": "Launch Vice (Cartridge)",
+            "program": "${workspaceFolder}/build/hello.crt",
+            "preLaunchTask": "Build Cartridge Image"
         },
         {
             "type": "vice",
             "request": "attach",
             "name": "Attach Vice",
             "hostname": "localhost",
-            "port": 6502,
-            "preLaunchTask": "${defaultBuildTask}"
-        },
-        {
-            "type": "6502",
-            "request": "launch",
-            "name": "Launch 6502",
-            "preLaunchTask": "${defaultBuildTask}"
+            "port": 6502
         }
     ]
 }

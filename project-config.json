@@ -1,10 +1,10 @@
 {
     "name": "hello",
-    "description": "C64 Hello World with splash screen",
+    "description": "SHACKMATE EasyFlash cartridge",
     "toolkit": "acme",
-    "main": "hello/hello.asm",
+    "main": "hello/bank_driver.asm",
     "build": "debug",
-    "definitions": [],
+    "definitions": ["BANKNUM=0"],
     "includes": ["hello"],
     "args": [],
     "compiler": ""

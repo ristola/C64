@@ -72,6 +72,16 @@ ult_ptr    = $10   ; 2 bytes: pointer to a null-terminated param string
 ult_outptr = $12   ; 2 bytes: pointer to caller's output buffer
 ult_reqlen = $14   ; 2 bytes: requested length (LSB first) for reads
 ult_tmp    = $16   ; 1 byte scratch
+ult_aborted = $17  ; 1 byte: set by ult_cmd_wait when RUN/STOP cancels a
+                     ; command that never finished (see ult_cmd_wait) -
+                     ; callers must check this after ult_cmd_push and
+                     ; bail out instead of processing a response that
+                     ; never arrived. Confirmed live on real hardware:
+                     ; NET_CMD_SOCKET_READ (and likely TCP_CONNECT) can
+                     ; block indefinitely waiting on the Ultimate's own
+                     ; network I/O - exactly the risk this file's
+                     ; ULT_HTTP_GET comment already flagged as unverified
+                     ; before real hardware confirmed it.
 
 ; ============================================================
 ; Low-level primitives
@@ -120,6 +130,8 @@ ult_cmd_str_done
 
 ; Push the assembled command and wait for it to finish.
 ult_cmd_push
+        lda     #$00
+        sta     ult_aborted
         lda     ULT_CTRL
         ora     #ULT_PUSH_CMD
         sta     ULT_CTRL
@@ -130,7 +142,25 @@ ult_cmd_push
         ora     #ULT_CLR_ERR    ; flag. Caller should check status and
         sta     ULT_CTRL        ; may want to retry; we don't loop here
         rts                     ; to avoid an unbounded retry loop.
+; Waits for BUSY to clear, but not unconditionally - also polls GETIN
+; every pass so a stuck command (Ultimate itself blocked on a real
+; network read that never gets a response) can still be cancelled by
+; RUN/STOP instead of hanging the whole machine forever. Sets
+; ult_aborted and issues ULT_ABORT (never used before this) rather than
+; waiting for BUSY to clear on its own, since after RUN/STOP is pressed
+; there's no reason to trust the operation will ever finish normally.
 ult_cmd_wait
+        jsr     $ffe4           ; GETIN - non-blocking, doesn't disturb
+        beq     ucw_check       ; the Command Interface registers at all
+        cmp     #$03            ; RUN/STOP
+        bne     ucw_check
+        lda     ULT_CTRL
+        ora     #ULT_ABORT
+        sta     ULT_CTRL
+        lda     #$01
+        sta     ult_aborted
+        rts
+ucw_check
         lda     ULT_STATUS
         and     #ULT_ST_STATE_MASK
         cmp     #ULT_ST_STATE_BUSY

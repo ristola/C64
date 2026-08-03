@@ -45,6 +45,7 @@ BAS_STRFIN  = $b4ca      ; finalize the string built via BAS_GETSPA:
                           ; sets BAS_VALTYP=$FF and the temp descriptor
 CHR_LPAREN  = $28
 CHR_RPAREN  = $29
+CHR_QUOTE   = $22
 
 ; --- Fixed-slot jump table entries for this bank (slots.asm) ---
 !fill SLOT_DOKE-*, $ff
@@ -149,16 +150,18 @@ FindFunc
 HexDollarFunc
         jsr     BAS_CHRGOT
         cmp     #CHR_LPAREN
-        bne     func_syntax_error
-        jsr     BAS_CHRGET      ; consume '('
+        beq     +
+        jmp     func_syntax_error
++       jsr     BAS_CHRGET      ; consume '('
         lda     #$00
         sta     BAS_VALTYP
         jsr     BAS_FRMNUM      ; evaluate + require numeric -> FAC1
         jsr     BAS_GETADR      ; $14/$15 = 16-bit value, low/high
         jsr     BAS_CHRGOT
         cmp     #CHR_RPAREN
-        bne     func_syntax_error
-        jsr     BAS_CHRGET      ; consume ')'
+        beq     +
+        jmp     func_syntax_error
++       jsr     BAS_CHRGET      ; consume ')'
         lda     #4
         jsr     BAS_GETSPA      ; allocate a 4-byte string -> $62/$63
         ldy     #0
@@ -171,24 +174,69 @@ HexDollarFunc
         sta     func_is_string
         jmp     bank_return
 
-; --- DEC$(n): 16-bit n (0-65535) as decimal digits, no leading zeros
-; (DEC$(0) = "0") - the string-returning equivalent of PRINT n itself,
-; useful for building up larger strings (e.g. "SCORE: "+DEC$(s)) without
-; BASIC's own STR$ leading-space quirk (STR$ always reserves a sign
-; column; DEC$ never does, since these are always unsigned). ---
+; --- DEC$("hex string"): the inverse of HEX$ - takes a quoted string
+; of 1-4 hex digits (0-9, A-F, a-f) and returns its decimal value as a
+; string, e.g. DEC$("D020") = "53280". C64 BASIC has no hex-literal
+; syntax (no "$FF"-style prefix), so the argument has to be a real
+; quoted string - DEC$(D020) without quotes parses "D020" as an
+; undefined variable name (silently 0), not a hex constant. That's why
+; this takes a string, not DEC$(n)'s old numeric argument (which was
+; just STR$ without the leading space - not actually useful as HEX$'s
+; inverse, and not what "the decimal value of the hex number entered"
+; means). ---
 DecDollarFunc
         jsr     BAS_CHRGOT
         cmp     #CHR_LPAREN
-        bne     func_syntax_error
-        jsr     BAS_CHRGET      ; consume '('
-        lda     #$00
-        sta     BAS_VALTYP
-        jsr     BAS_FRMNUM
-        jsr     BAS_GETADR      ; $14/$15 = 16-bit value, low/high
+        beq     +
+        jmp     func_syntax_error
++       jsr     BAS_CHRGET      ; consume '('
+        jsr     BAS_CHRGOT
+        cmp     #CHR_QUOTE
+        beq     +
+        jmp     func_syntax_error
++       jsr     BAS_CHRGET      ; consume opening quote
+        lda     #0
+        sta     hex_acc_lo
+        sta     hex_acc_hi
+        sta     hex_digit_count
+dec_hex_loop
+        jsr     BAS_CHRGOT
+        cmp     #CHR_QUOTE
+        beq     dec_hex_done
+        cmp     #0              ; end of line - unterminated string
+        beq     dhl_error
+        ldx     hex_digit_count
+        cpx     #4              ; a 16-bit value can't hold a 5th digit
+        beq     dhl_error
+        jsr     hex_char_to_nibble
+        bcc     dhl_valid
+dhl_error
+        jmp     func_syntax_error
+dhl_valid
+        pha                     ; stash the nibble - shifting clobbers A
+        ldx     #4
+dec_shift_loop
+        asl     hex_acc_lo
+        rol     hex_acc_hi
+        dex
+        bne     dec_shift_loop
+        pla
+        ora     hex_acc_lo
+        sta     hex_acc_lo
+        inc     hex_digit_count
+        jsr     BAS_CHRGET
+        jmp     dec_hex_loop
+dec_hex_done
+        jsr     BAS_CHRGET      ; consume closing quote
         jsr     BAS_CHRGOT
         cmp     #CHR_RPAREN
-        bne     func_syntax_error
-        jsr     BAS_CHRGET      ; consume ')'
+        beq     +
+        jmp     func_syntax_error
++       jsr     BAS_CHRGET      ; consume ')'
+        lda     hex_acc_lo
+        sta     $14
+        lda     hex_acc_hi
+        sta     $15
         jsr     dec_to_buf      ; digits -> dec_buf, dtb_outpos = count
         lda     dtb_outpos
         jsr     BAS_GETSPA      ; allocate dtb_outpos bytes -> $62/$63
@@ -205,6 +253,39 @@ dec_copy_done
         lda     #1
         sta     func_is_string
         jmp     bank_return
+
+; A (PETSCII char) -> A = nibble value 0-15, carry clear, if it's a
+; valid hex digit (0-9, A-F, a-f); carry set (A undefined) otherwise.
+hex_char_to_nibble
+        cmp     #'0'
+        bcc     hctn_bad
+        cmp     #'9'+1
+        bcs     hctn_not_digit
+        sec
+        sbc     #'0'
+        clc
+        rts
+hctn_not_digit
+        cmp     #'A'
+        bcc     hctn_bad
+        cmp     #'F'+1
+        bcs     hctn_try_lower
+        sec
+        sbc     #'A'-10
+        clc
+        rts
+hctn_try_lower
+        cmp     #'a'
+        bcc     hctn_bad
+        cmp     #'f'+1
+        bcs     hctn_bad
+        sec
+        sbc     #'a'-10
+        clc
+        rts
+hctn_bad
+        sec
+        rts
 
 ; --- Shared "?SYNTAX ERROR" tail for HEX$/DEC$'s own hand-rolled paren
 ; checks. Falls back to a plain numeric 0 result rather than a real

@@ -2,19 +2,16 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "type": "vs64",
-            "action": "build",
-            "group": "build",
-            "label": "build project"
-        },
-        {
             "label": "Build Cartridge Image",
             "type": "shell",
             "command": "./build_cart.sh",
             "options": {
                 "cwd": "${workspaceFolder}/hello"
             },
-            "group": "build",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
             "presentation": {
                 "reveal": "always",
                 "panel": "shared",
@@ -34,19 +31,6 @@
                 "reveal": "always",
                 "panel": "shared",
                 "clear": false
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "Build All",
-            "dependsOn": [
-                "build project",
-                "Build Cartridge Image"
-            ],
-            "dependsOrder": "sequence",
-            "group": {
-                "kind": "build",
-                "isDefault": true
             },
             "problemMatcher": []
         }

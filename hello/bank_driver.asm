@@ -7,10 +7,9 @@
 ; tables pushed past that) so it works regardless of which bank happens
 ; to be switched in - see resident.asm for why that matters.
 ;
-; Banks with no content yet (11-12, reserved for the later
-; SERIAL/DEVELOPMENT plan) fall straight through to the padding below
-; with nothing sourced - an all-$FF ROML, matching real erased-flash
-; state.
+; Bank 12 has no content yet (reserved for the later SERIAL plan) and
+; falls straight through to the padding below with nothing sourced - an
+; all-$FF ROML, matching real erased-flash state.
 
 *=$8000
 
@@ -49,8 +48,10 @@
 !if BANKNUM = 10 {
         !source "bank10_content.asm"
 }
-; Banks 11-12 reserved for the later SERIAL/DEVELOPMENT plan -
-; intentionally no content yet.
+!if BANKNUM = 11 {
+        !source "bank11_content.asm"
+}
+; Bank 12 reserved for the later SERIAL plan - intentionally no content yet.
 
 !if * > $9800 {
         !error "bank content overflowed into the resident kernel region ($9800)"

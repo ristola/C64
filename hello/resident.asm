@@ -233,6 +233,22 @@ install_basic_ext
         sta     $030a
         lda     #>EvaluateFunction
         sta     $030b
+
+; Relabel BASIC's own cold-start banner, "**** COMMODORE 64 BASIC V2
+; ****", from V2 to HAM (SHACKMATE's ham-radio branding standing in for
+; the version marker) - verified against a real, unmodified boot's
+; actual screen RAM contents (not guessed): "V2" sits at screen offset
+; $0444/$0445, with a space at $0446 before the closing "****" that
+; "HAM" (one character longer than "V2") absorbs, so nothing after it
+; needs to shift. Only safe to do here, this long after cart_start's
+; jmp ($a000) - BASIC's own cold start prints this banner as part of
+; that jump and would just overwrite the change if done any earlier.
+        lda     #$08        ; screen code 'H'
+        sta     $0444
+        lda     #$01        ; screen code 'A'
+        sta     $0445
+        lda     #$0d        ; screen code 'M'
+        sta     $0446
         rts
 
 ; Prints " NOT YET IMPLEMENTED" + newline - the common tail every
@@ -447,6 +463,14 @@ ExtBankTab
         !byte   8, 8, 8, 8, 8           ; SOUND VOLUME WAVE ADSR FILTER
         !byte   9, 9, 9                 ; FLASHERASE FLASHLOAD FLASHVERIFY
         !byte   10, 10, 10, 10, 10, 10, 10 ; DIR DEVICE CD DELETE RENAME DLOAD DSAVE
+        !byte   11, 11                  ; HTTPGET TELNET
+        !byte   0                       ; JET - replays the boot flyby;
+                                          ; bank 0, same bank menu_open
+                                          ; lives in (see slots.asm's
+                                          ; SLOT_JET comment)
+        !byte   0                       ; REBOOT - real hardware reset,
+                                          ; bank 0 (trivial, no real bank
+                                          ; dependency either way)
 ExtSlotLoTab
         !byte   <SLOT_COLOR, <SLOT_BORDER, <SLOT_BACKGROUND
         !byte   <SLOT_LOCATE, <SLOT_PRINTAT, <SLOT_HELP
@@ -459,6 +483,9 @@ ExtSlotLoTab
         !byte   <SLOT_FLASHERASE, <SLOT_FLASHLOAD, <SLOT_FLASHVERIFY
         !byte   <SLOT_DIR, <SLOT_DEVICE, <SLOT_CD, <SLOT_DELETE
         !byte   <SLOT_RENAME, <SLOT_DLOAD, <SLOT_DSAVE
+        !byte   <SLOT_HTTPGET, <SLOT_TELNET
+        !byte   <SLOT_JET
+        !byte   <SLOT_REBOOT
 
 ; ============================================================
 ; Extended-function dispatch (IEVAL, $030A/$030B)
@@ -685,7 +712,51 @@ irq_hook
         dec     basic_ext_countdown
         bne     irq_ext_checked
         jsr     install_basic_ext
+        ; Kick off the boot splash jet flyby now that BASIC's cold
+        ; start (which just ran, back in bank0_content.asm) has
+        ; settled. tower_anim_start now lives in bank0_content.asm,
+        ; not here (see slots.asm's SLOT_TOWER_ANIM_START comment for
+        ; why) - reached via bank_call instead of a plain JSR, ending
+        ; via bank_return. Safe to bank_call from right here since
+        ; irq_hook's own IRQ context already has interrupts hardware-
+        ; disabled on entry.
+        lda     #<SLOT_TOWER_ANIM_START
+        sta     call_ptr
+        lda     #>SLOT_TOWER_ANIM_START
+        sta     call_ptr+1
+        lda     #0              ; Bank 0
+        jsr     bank_call
 irq_ext_checked
+
+; Boot splash jet-flyby animation: one tick per jiffy, non-blocking
+; (this is inside an IRQ - a blocking loop here would freeze the whole
+; machine, unlike a menu feature's own delay loops). tower_anim_ticks
+; is 0 whenever the animation isn't running, including forever before
+; tower_anim_start's first call above; its current value also doubles
+; as the fly/hold/fade phase selector jet_anim_tick reads from A.
+        lda     tower_anim_ticks
+        beq     irq_tower_checked
+        jsr     jet_anim_tick
+        dec     tower_anim_ticks
+        bne     irq_tower_checked
+        lda     #$00
+        sta     $d015           ; belt-and-suspenders - jet_anim_tick's
+                                  ; own hold-phase transition already
+                                  ; hides the sprite well before this
+        ldx     #$00        ; erase the (static) copyright line too
+irq_copy_erase
+        lda     #$20        ; space
+        sta     JET_COPY_SCREEN,x
+        inx
+        cpx     #JET_COPY_LEN
+        bne     irq_copy_erase
+        jsr     jet_charset_revert  ; back to the stock charset - the
+                                      ; fade phase's own timing (9
+                                      ; letters x 7 ticks = JET_FADE_
+                                      ; TICKS exactly) guarantees every
+                                      ; SHACKMATE letter is already
+                                      ; erased by now too
+irq_tower_checked
 
         jsr     read_f1
         bne     irq_f1_up   ; Z=0 - not pressed
@@ -739,6 +810,354 @@ read_f1
         pla
         rts
 
+; --- Boot splash jet-flyby animation ---
+; One-time setup (tower_anim_start, jet_charset_setup/revert's own
+; charset copy, jet_bold_font, jet_sprite) lives in
+; bank0_content.asm now, reached via bank_call from irq_hook - see
+; slots.asm's SLOT_TOWER_ANIM_START comment for why. Everything below
+; still has to stay resident: jet_anim_tick runs on every jiffy tick
+; from irq_hook regardless of which bank happens to be switched in at
+; that moment, unlike the one-time setup (which only ever runs at a
+; moment cur_bank is still guaranteed 0).
+;
+; A jet sprite flies left to right across the middle of the screen,
+; "painting" each letter into screen memory as its TAIL (not the nose)
+; passes that column - trailing behind like a real skywriting exhaust
+; trail, not pre-drawing ahead of itself. After a short hold, the text
+; fades out (dimming through a few colors before erasing) in the same
+; left-to-right order. Single one-way flight, not the earlier bouncing
+; icon, so tower_dir_x/tower_dir_y (slots.asm) go unused now; tower_x/
+; tower_y/tower_anim_ticks are reused (see slots.asm's own comment).
+
+; Row 11, columns 11-28 (18 cols, centered: (40-18)/2=11) - see
+; bank0_content.asm's tower_anim_start for the same constants and the
+; full row/column reasoning (kept in sync here since each bank is a
+; separate assembly). Color RAM mirrors screen memory 1-for-1 at $D800
+; instead of $0400, so the same math applies with that base swapped.
+JET_TEXT_SCREEN = $05c3        ; $0400 + 11*40 + 11
+JET_TEXT_COLOR  = $d9c3        ; $d800 + 11*40 + 11
+
+; Row 13, columns 9-30 (22 chars) - the copyright line. Revealed
+; progressively by jat_fly, same tail-trailing trigger as the
+; SHACKMATE letters above, just its own index/threshold table
+; (jet_copy_reveal_idx/jet_copy_reveal_x) since it's 22 single
+; characters instead of 9 letter-pairs. Not part of the per-letter
+; fade sequence (jat_fade) - erased in one shot in irq_hook, alongside
+; jet_charset_revert, rather than adding another 22-character staggered
+; fade on top of the 9-letter one already there.
+JET_COPY_SCREEN = $0611        ; $0400 + 13*40 + 9
+JET_COPY_COLOR  = $da11        ; $d800 + 13*40 + 9
+JET_COPY_LEN    = 22
+
+; Phase tick budget - tower_anim_ticks counts down from this, and
+; jet_anim_tick derives fly/hold/fade from whichever band the current
+; count falls in (see that routine). JET_FLY_TICKS/JET_TOTAL_TICKS
+; aren't directly used by anything below (only HOLD/FADE feed the
+; phase-boundary comparisons) - kept here anyway, matching bank0_
+; content.asm's own copy, purely so the numbers in this comment stay
+; honest. ~214 jiffies: fly+reveal+off-screen exit (127 ticks), a short
+; hold (30 ticks), then the fade wipe (9 letters x 7 ticks/letter = 63
+; - not 6, see jat_fade's own comment on that).
+JET_FLY_TICKS   = 127
+JET_HOLD_TICKS  = 30
+JET_FADE_TICKS  = 63
+JET_TOTAL_TICKS = JET_FLY_TICKS + JET_HOLD_TICKS + JET_FADE_TICKS
+
+; Reveal-trigger sprite-X thresholds, one per LETTER (not per column),
+; left to right. Each threshold is simply that letter's left-half
+; column's on-screen X (column 0 lines up with sprite X 24, +8 per
+; column - same mapping the old tower_step_x's bounds already used) -
+; no nose offset: jat_reveal_loop compares tower_x itself (the sprite's
+; left edge, near the TAIL) directly against these, so the letter
+; appears once the tail has passed it, not the nose.
+jet_reveal_x
+        !byte 112, 128, 144, 160, 176, 192, 208, 224, 240
+
+; Character-code PAIRS (left half, right half) for "SHACKMATE", left
+; to right - see jet_charset_setup for what $80-$8F actually contain.
+jet_letters
+        !byte $80, $81   ; S
+        !byte $82, $83   ; H
+        !byte $84, $85   ; A
+        !byte $86, $87   ; C
+        !byte $88, $89   ; K
+        !byte $8a, $8b   ; M
+        !byte $84, $85   ; A
+        !byte $8c, $8d   ; T
+        !byte $8e, $8f   ; E
+
+; Reveal-trigger thresholds for the copyright line, one per character
+; (not per letter-pair - this row is normal single-width text), same
+; tail-trailing mapping as jet_reveal_x above. The last two are clamped
+; to 254 rather than their true 256/264 - both comfortably past where
+; jet_x_hi (slots.asm) would otherwise be needed for a correct 9-bit
+; comparison here; a character or two revealing a few pixels early is
+; not worth the extra wraparound-aware comparison logic.
+jet_copy_reveal_x
+        !byte 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176
+        !byte 184, 192, 200, 208, 216, 224, 232, 240, 248, 254, 254
+
+; "(c) 2026 - N4LDR & WD4VA" - see bank0_content.asm's jet_copyright_
+; glyph for the one custom character ($90) this needs; everything else
+; is standard screen codes.
+jet_copyright_text
+        !byte $90, $20                       ; (c) + space
+        !byte $32, $30, $32, $36             ; 2026
+        !byte $20, $2d, $20                  ; " - "
+        !byte $0e, $34, $0c, $04, $12        ; N4LDR
+        !byte $20, $26, $20                  ; " & "
+        !byte $17, $04, $34, $16, $01        ; WD4VA
+
+; One call per jiffy tick from irq_hook, replacing the old tower_step_x/
+; tower_step_y bounce pair. A holds tower_anim_ticks' current value on
+; entry (irq_hook already loaded it for its own "beq" check just before
+; calling here) - that value doubles as the phase selector so no
+; separate phase variable is needed.
+jet_anim_tick
+        cmp     #JET_HOLD_TICKS+JET_FADE_TICKS+1
+        bcs     jat_fly         ; remaining > hold+fade -> still flying
+        cmp     #JET_FADE_TICKS+1
+        bcs     jat_hold_check  ; remaining > fade, <= hold+fade -> hold
+        jmp     jat_fade
+jat_hold_check
+        cmp     #JET_HOLD_TICKS+JET_FADE_TICKS
+        bne     jat_hold
+        lda     #$00            ; first hold tick - hide the jet and
+        sta     $d015           ; force-reveal anything not yet shown
+                                  ; (rounding safety net)
+jat_force_reveal
+        ldx     jet_reveal_idx
+        cpx     #9
+        beq     jat_force_reveal_copy
+        jsr     jet_reveal_letter
+        jmp     jat_force_reveal
+jat_force_reveal_copy
+        ldx     jet_copy_reveal_idx
+        cpx     #JET_COPY_LEN
+        beq     jat_hold
+        jsr     jet_copy_reveal_char
+        jmp     jat_force_reveal_copy
+jat_hold
+        rts
+
+; Reveals SHACKMATE letter X (0-8): writes its bold-font character
+; pair (jet_letters) and sets both columns white. Shared by both
+; jat_force_reveal (hold-phase safety net) and jat_reveal_loop (normal
+; in-flight reveal) - same work either way, just reached differently.
+; Trashes A/Y; advances jet_reveal_idx itself.
+jet_reveal_letter
+        txa
+        asl
+        tay                     ; Y = letter index * 2 (screen/table
+                                  ; offset - each letter is 2 columns)
+        lda     jet_letters,y
+        sta     JET_TEXT_SCREEN,y
+        lda     jet_letters+1,y
+        sta     JET_TEXT_SCREEN+1,y
+        lda     $d012           ; raster line - cheap, fast-changing
+        eor     tower_x         ; entropy source; mixed with the jet's
+        and     #$0f            ; own current X so consecutive letters
+        bne     jrl_color_ok    ; (revealed on different ticks, at
+        lda     #$01            ; different X positions) don't land on
+jrl_color_ok                     ; the same value even if the raster
+                                  ; line alone repeats. Masked to a
+                                  ; color (0-15); landing on black (0)
+                                  ; falls back to white rather than
+                                  ; re-rolling - a letter needs SOME
+                                  ; color right now, not a retry loop
+        sta     JET_TEXT_COLOR,y
+        sta     JET_TEXT_COLOR+1,y
+        inc     jet_reveal_idx
+        rts
+
+; Reveals copyright-line character X (0-21): single character, unlike
+; jet_reveal_letter's pair - this row is normal single-width text.
+; Trashes A; advances jet_copy_reveal_idx itself.
+jet_copy_reveal_char
+        lda     jet_copyright_text,x
+        sta     JET_COPY_SCREEN,x
+        lda     #$01            ; white
+        sta     JET_COPY_COLOR,x
+        inc     jet_copy_reveal_idx
+        rts
+
+; Advances tower_x by 3 every tick with NO clamp - once past 255 it
+; wraps in ordinary 8-bit arithmetic, so jet_x_hi (slots.asm) latches
+; permanently on the first wrap and stays set (via sprite X's MSB bit,
+; $D010) so the sprite keeps moving right in real screen terms instead
+; of snapping back to the left edge - the jet visibly flies off the
+; right side of the screen over JET_FLY_TICKS' back half, rather than
+; stopping short and just disappearing. Safe for jat_reveal_loop below
+; to keep comparing the wrapped tower_x directly against jet_reveal_x's
+; thresholds (max 240): by the time wraparound can happen (tower_x
+; would need to reach 256, well past every threshold), jet_reveal_idx
+; has already reached 9, so the comparison loop exits immediately
+; without ever looking at a wrapped, meaningless value.
+jat_fly
+        lda     tower_x
+        clc
+        adc     #3
+        sta     tower_x
+        sta     $d000
+        bcc     jat_fly_no_wrap
+        lda     #$01
+        sta     jet_x_hi        ; latch - stays set for the rest of
+                                  ; this flight once it first wraps
+jat_fly_no_wrap
+        lda     $d010
+        and     #$fe            ; clear sprite 0's X MSB bit, then...
+        ora     jet_x_hi        ; ...set it back if we've ever wrapped
+        sta     $d010
+        lda     tower_x         ; tail-based: compare the sprite's own
+                                  ; left edge directly, no nose offset -
+                                  ; see jet_reveal_x's own comment
+jat_reveal_loop
+        ldx     jet_reveal_idx
+        cpx     #9
+        beq     jat_copy_reveal_loop
+        cmp     jet_reveal_x,x
+        bcc     jat_copy_reveal_loop  ; tail hasn't reached the next
+                                        ; SHACKMATE letter yet - the
+                                        ; copyright line's own thresholds
+                                        ; are independent, still worth
+                                        ; checking this same tick
+        pha
+        jsr     jet_reveal_letter
+        pla
+        jmp     jat_reveal_loop
+jat_copy_reveal_loop
+        ldx     jet_copy_reveal_idx
+        cpx     #JET_COPY_LEN
+        beq     jat_fly_done
+        cmp     jet_copy_reveal_x,x
+        bcc     jat_fly_done        ; tail hasn't reached the next copyright
+                                  ; character yet
+        pha
+        jsr     jet_copy_reveal_char
+        pla
+        jmp     jat_copy_reveal_loop
+jat_fly_done
+        rts
+
+; Fades the current letter (jet_fade_idx) through a few colors over 6
+; ticks, then erases it and moves to the next - strictly left to right,
+; one letter at a time (simpler to drive off a single tick counter than
+; a true overlapping wipe, and still reads clearly as "fading out left
+; to right"). jet_charset_revert (restoring the stock character set)
+; happens separately, from irq_hook, once tower_anim_ticks itself
+; reaches 0 - JET_FADE_TICKS is exactly 9x6, so the 9th letter's own
+; erase always lands on the very last fade tick.
+jat_fade
+        ldx     jet_fade_idx
+        cpx     #9
+        beq     jaft_rts        ; all letters already erased
+        lda     jet_fade_subtick
+        cmp     #6
+        beq     jaft_erase
+        lsr                     ; color-table index = subtick/2 (0,1,2
+                                  ; for subtick 0,2,4 - odd subticks
+                                  ; harmlessly repeat the prior color)
+        tay
+        lda     jet_fade_colors,y
+        pha                     ; stash the color - txa/asl below needs A
+        txa
+        asl
+        tay                     ; Y = letter index * 2
+        pla
+        sta     JET_TEXT_COLOR,y
+        sta     JET_TEXT_COLOR+1,y
+        jsr     jet_copy_fade_color  ; keep the copyright line's own
+                                       ; fade in step with this letter
+        jmp     jaft_next
+jaft_erase
+        txa
+        asl
+        tay                     ; Y = letter index * 2
+        lda     #$20            ; space - erase this letter (both
+        sta     JET_TEXT_SCREEN,y   ; columns - plain space is unaffected
+        sta     JET_TEXT_SCREEN+1,y ; by the $80-$8F patch either way)
+        jsr     jet_copy_fade_erase  ; same - erase this letter's
+                                       ; copyright-character batch too
+        inc     jet_fade_idx
+        lda     #$00
+        sta     jet_fade_subtick
+        rts
+jaft_next
+        inc     jet_fade_subtick
+jaft_rts
+        rts
+jet_fade_colors
+        !byte $0f, $0c, $0b    ; light gray, medium gray, dark gray
+
+; Cumulative copyright-line character count that should be
+; colored/erased by the time SHACKMATE letter N finishes fading
+; (index 0-8) - 22 characters spread proportionally across 9 letters
+; (round((n+1)*22/9)) so both lines finish fading at exactly the same
+; tick, without giving the copyright line its own, much longer 22x7
+; tick budget.
+copy_fade_targets
+        !byte 2, 5, 7, 10, 12, 15, 17, 20, 22
+
+; Colors copyright characters from jet_copy_fade_pos up to this
+; letter's own copy_fade_targets entry with A's value (the same color
+; jat_fade just applied to the current SHACKMATE letter). Does NOT
+; advance jet_copy_fade_pos - only jet_copy_fade_erase does, since
+; color changes alone don't mark characters as "done". Trashes A/X/Y.
+jet_copy_fade_color
+        pha                     ; stash the color
+        ldx     jet_fade_idx
+        lda     copy_fade_targets,x
+        sec
+        sbc     jet_copy_fade_pos
+        tay                     ; Y = how many chars are newly due
+        ldx     jet_copy_fade_pos
+        pla                     ; A = color again
+jcfc_loop
+        cpy     #0
+        beq     jcfc_done
+        sta     JET_COPY_COLOR,x
+        inx
+        dey
+        jmp     jcfc_loop
+jcfc_done
+        rts
+
+; Erases (space) copyright characters from jet_copy_fade_pos up to
+; this letter's own copy_fade_targets entry, then advances
+; jet_copy_fade_pos to that target. Trashes A/X/Y.
+jet_copy_fade_erase
+        ldx     jet_fade_idx
+        lda     copy_fade_targets,x
+        sec
+        sbc     jet_copy_fade_pos
+        tay                     ; Y = how many chars are newly due
+        ldx     jet_copy_fade_pos
+        lda     #$20            ; space
+jcfe_loop
+        cpy     #0
+        beq     jcfe_done
+        sta     JET_COPY_SCREEN,x
+        inx
+        dey
+        jmp     jcfe_loop
+jcfe_done
+        stx     jet_copy_fade_pos   ; X now holds the new position
+        rts
+
+; Reverts $D018 to the stock ROM-shadowed charset - called from
+; irq_hook once tower_anim_ticks reaches 0, so normal typed BASIC text
+; renders normally again afterward. The charset copy/patch itself
+; (jet_charset_setup) and the bold font/sprite data it needs live in
+; bank0_content.asm now (see slots.asm's SLOT_TOWER_ANIM_START comment)
+; - this one small revert is the only piece of that whole system that
+; still has to stay resident, since tower_anim_ticks can reach 0 on any
+; tick, when cur_bank could be anything, not just the guaranteed-bank-0
+; moment the one-time setup runs at.
+jet_charset_revert
+        lda     #$15        ; stock default: screen $0400, charset $1000
+        sta     $d018
+        rts
+
 ; Copy zero page $02-$38 to zp_save_buf. Trashes A/X.
 zp_save
         ldx     #$00
@@ -768,7 +1187,10 @@ zp_restore_loop
 ; ($0400-$07FF) rather than exactly 1000 bytes - the last 24 of those
 ; include the hardware sprite pointers at $07F8-$07FF, which is
 ; actually wanted here: the graphics demo repoints sprites, so restoring
-; them is part of "restore the basic screen", not overshoot.
+; them is part of "restore the basic screen", not overshoot. Also saves/
+; restores the cursor's row/column (via PLOT, $FFF0) so BASIC's input
+; cursor ends up back exactly where it was, not wherever the menu's own
+; printing last left it.
 save_screen
         ldx     #$00
 save_screen_loop
@@ -796,7 +1218,12 @@ save_screen_loop
         sta     misc_save_buf+1
         lda     $0286        ; current text color (used by $FFD2 for
         sta     misc_save_buf+2   ; whatever gets typed/printed next)
-        rts
+        sec
+        jsr     $fff0        ; PLOT (read): X=column, Y=row - the KERNAL's
+        stx     misc_save_buf+3   ; own way to read cursor position, rather
+        sty     misc_save_buf+4   ; than poking $D3/$D6 directly and hoping
+        rts                        ; the internal screen-line pointers ($D1/
+                                    ; $D2 etc.) stay consistent on our own
 
 restore_screen
         ldx     #$00
@@ -825,7 +1252,12 @@ restore_screen_loop
         sta     $d021
         lda     misc_save_buf+2
         sta     $0286
-        rts
+        ldx     misc_save_buf+3
+        ldy     misc_save_buf+4
+        clc
+        jsr     $fff0        ; PLOT (set): X=column, Y=row - puts the
+        rts                   ; cursor back where BASIC had left it, not
+                               ; wherever the menu's own printing left it
 
 ; --- Tokenize: BASIC's line-crunch calls here (via ICRNCH) for each
 ; word in a freshly-typed line. Tries the stock keyword table
@@ -1252,6 +1684,14 @@ ExtTab
         !byte   'D'+$80
         !text   "DSAV"
         !byte   'E'+$80
+        !text   "HTTPGE"
+        !byte   'T'+$80
+        !text   "TELNE"
+        !byte   'T'+$80
+        !text   "JE"
+        !byte   'T'+$80
+        !text   "REBOO"
+        !byte   'T'+$80
         !byte   0
 
 ; Extended-FUNCTION keyword table - same format again, own independent
