@@ -1,6 +1,6 @@
-; Bank 5 content: MEMORY category. DOKE/DUMP/FILL/MOVE are statements;
-; DEEK/FIND/HEX$/DEC$ are functions (dispatched via resident.asm's
-; EvaluateFunction/IEVAL). DEEK/FIND still stub to a placeholder numeric
+; Bank 5 content: MEMORY category. DUMP/FILL/MOVE are statements;
+; FIND/HEX$/DEC$ are functions (dispatched via resident.asm's
+; EvaluateFunction/IEVAL). FIND still stubs to a placeholder numeric
 ; 0 via func_result_hi/lo + bank_return. HEX$/DEC$ are real: BASIC's
 ; actual string-descriptor convention - $B47D to allocate N bytes
 ; (A=length in, $62/$63=data pointer out), write the bytes yourself,
@@ -48,16 +48,12 @@ CHR_RPAREN  = $29
 CHR_QUOTE   = $22
 
 ; --- Fixed-slot jump table entries for this bank (slots.asm) ---
-!fill SLOT_DOKE-*, $ff
-        jmp     DokeCmd
 !fill SLOT_DUMP-*, $ff
         jmp     DumpCmd
 !fill SLOT_FILL-*, $ff
         jmp     FillCmd
 !fill SLOT_MOVE-*, $ff
         jmp     MoveCmd
-!fill SLOT_DEEK-*, $ff
-        jmp     DeekFunc
 !fill SLOT_FIND-*, $ff
         jmp     FindFunc
 !fill SLOT_HEXDOLLAR-*, $ff
@@ -71,17 +67,6 @@ CHR_QUOTE   = $22
 
 *=$8100
 
-DokeCmd
-        ldx     #0
-doke_print_loop
-        lda     doke_name,x
-        beq     doke_print_done
-        jsr     $ffd2
-        inx
-        bne     doke_print_loop
-doke_print_done
-        jsr     print_stub_suffix
-        jmp     bank_return_basic
 DumpCmd
         ldx     #0
 dump_print_loop
@@ -116,9 +101,6 @@ move_print_done
         jsr     print_stub_suffix
         jmp     bank_return_basic
 
-doke_name
-        !text   "DOKE"
-        !byte   0
 dump_name
         !text   "DUMP"
         !byte   0
@@ -129,11 +111,6 @@ move_name
         !text   "MOVE"
         !byte   0
 
-DeekFunc
-        lda     #$00
-        sta     func_result_hi
-        sta     func_result_lo
-        jmp     bank_return
 FindFunc
         lda     #$00
         sta     func_result_hi

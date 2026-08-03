@@ -6,7 +6,7 @@
 ; (slots.asm) that resident.asm's ExecuteCommand bank_calls into.
 ;
 ; SCREEN category lives here alongside CLS (small enough not to need
-; its own bank) - COLOR/BORDER/BACKGROUND/LOCATE/PRINTAT are stubs for
+; its own bank) - COLOR/LOCATE/PRINTAT are stubs for
 ; now (each prints its own name via a small inline loop, then
 ; resident.asm's shared print_stub_suffix - see that routine's comment
 ; for why this can't be one shared routine taking a runtime pointer:
@@ -18,10 +18,6 @@
         jmp     ClsCmd
 !fill SLOT_COLOR-*, $ff
         jmp     ColorCmd
-!fill SLOT_BORDER-*, $ff
-        jmp     BorderCmd
-!fill SLOT_BACKGROUND-*, $ff
-        jmp     BackgroundCmd
 !fill SLOT_LOCATE-*, $ff
         jmp     LocateCmd
 !fill SLOT_PRINTAT-*, $ff
@@ -59,28 +55,6 @@ color_print_loop
 color_print_done
         jsr     print_stub_suffix
         jmp     bank_return_basic
-BorderCmd
-        ldx     #0
-border_print_loop
-        lda     border_name,x
-        beq     border_print_done
-        jsr     $ffd2
-        inx
-        bne     border_print_loop
-border_print_done
-        jsr     print_stub_suffix
-        jmp     bank_return_basic
-BackgroundCmd
-        ldx     #0
-background_print_loop
-        lda     background_name,x
-        beq     background_print_done
-        jsr     $ffd2
-        inx
-        bne     background_print_loop
-background_print_done
-        jsr     print_stub_suffix
-        jmp     bank_return_basic
 LocateCmd
         ldx     #0
 locate_print_loop
@@ -106,12 +80,6 @@ printat_print_done
 
 color_name
         !text   "COLOR"
-        !byte   0
-border_name
-        !text   "BORDER"
-        !byte   0
-background_name
-        !text   "BACKGROUND"
         !byte   0
 locate_name
         !text   "LOCATE"
@@ -161,7 +129,20 @@ help2_done
 ; before more text appears instead of everything scrolling past at
 ; once. Clears the screen afterward so the next page starts fresh
 ; rather than running on below this page's tail.
+;
+; cli first: OkExt's own sei is still in effect this whole time (not
+; lifted until bank_return_basic, at the very end of HelpCmd), and GETIN
+; only ever sees a NEW keypress via the jiffy IRQ's own keyboard scan -
+; with interrupts off, that scan can't run, so help_flush/help_wait_loop
+; below could only ever be satisfied by characters already sitting in
+; the buffer from BEFORE HELP was invoked, never a live keypress typed
+; in response to the prompt. Confirmed live: this silently ate the
+; user's very next keystroke after HELP (consumed here instead of
+; reaching the READY prompt afterward), which read as "Return doesn't
+; do anything until I type a throwaway character first" - same root
+; cause already fixed once for TelnetCmd's own interactive loop.
 help_wait_key
+        cli
         ldx     #0
 help_prompt_loop
         lda     help_more_msg,x
@@ -187,9 +168,9 @@ help_more_msg
 help_text1
         !text   "SCREEN:"
         !byte   13
-        !text   "  CLS COLOR BORDER BACKGROUND"
+        !text   "  CLS COLOR LOCATE PRINTAT"
         !byte   13
-        !text   "  LOCATE PRINTAT HELP"
+        !text   "  HELP"
         !byte   13,13
         !text   "GRAPHICS:"
         !byte   13
@@ -213,7 +194,7 @@ help_text1
 help_text2
         !text   "MEMORY:"
         !byte   13
-        !text   "  DEEK DOKE DUMP FILL MOVE"
+        !text   "  DUMP FILL MOVE"
         !byte   13
         !text   "  FIND HEX$ DEC$"
         !byte   13,13
@@ -232,6 +213,4 @@ help_text2
         !text   "DISK:"
         !byte   13
         !text   "  DIR DEVICE CD DELETE RENAME"
-        !byte   13
-        !text   "  DLOAD DSAVE"
         !byte   13,0

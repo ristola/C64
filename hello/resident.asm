@@ -169,34 +169,6 @@ bank_commit
         cli
         jmp     BAS_NEWSTT
 
-; For DLOAD only: a successful load replaces the current BASIC program,
-; so - unlike every other command - resuming BASIC's ordinary statement
-; loop (BAS_NEWSTT) is wrong; there is no "next statement" of a program
-; that no longer exists in memory the same way. Real stock LOAD, traced
-; live in VICE (breakpoints at $FFD5's call site and its continuation at
-; $E178, verified against real BASIC ROM disassembly, not guessed) does
-; exactly three things after a successful KERNAL LOAD: set VARTAB ($2D/
-; $2E) to the load's returned end address, then JSR $A659 (reset arrays/
-; strings), JSR $A533 (recompute STREND/FRETOP from the now-current
-; program), then JMP $A480 (BASIC's real post-LOAD continuation, which
-; prints READY. and waits) - not BAS_NEWSTT, which is a different entry
-; point for resuming an in-progress statement, not for "a whole new
-; program just replaced the old one." DLOAD's own command body
-; (bank10_content.asm) does the "stx $2D / sty $2E" itself (using the
-; end address KERNAL LOAD left in X/Y) since that's a plain zero-page
-; write, safe from any bank - this routine only does the part that MUST
-; run from resident code: restoring bank 0 before touching any of $A480
-; onward, exactly like bank_return_basic's own restore.
-bank_return_load
-        pla
-        sta     bank_tmp
-        sta     cur_bank
-        jsr     ram_bank_switch
-        cli
-        jsr     $a659
-        jsr     $a533
-        jmp     $a480
-
 ; Template for the RAM bank-switch trampoline (see slots.asm's
 ; ram_bank_switch for why this has to run from RAM, not from here).
 ; Copied into place at $0380 once, by cart_start - Bank 0 is the only
@@ -363,9 +335,28 @@ TestCmd
         bcc     OkNew
         cmp     #EXTTOK
         beq     OkExt
+; jsr (not jmp) BAS_EXECOLD, then jmp $a7ae to resume BASIC's own main
+; loop, matching real KERNAL's own default IGONE handler ($A7E4: "JSR
+; $0073 / JSR $A7ED / JMP $A7AE") byte for byte in calling convention,
+; not just in effect. Confirmed live this matters: some statement
+; handlers (RUN's own CLR-equivalent setup, at minimum) don't return to
+; BAS_EXECOLD via a normal RTS at all - they pop whatever's on the
+; stack at a specific point and manufacture their own "resume here"
+; jump from it, exactly the same trick real BASIC's own dispatcher
+; uses to reach them in the first place (push target-1, then JMP into
+; CHRGET so ITS OWN RTS consumes it). That trick only works if the
+; RIGHT return address is sitting on the stack for them to find - the
+; one real IGONE's own JSR would have pushed. Our old "jmp BAS_EXECOLD"
+; never pushed anything, so whatever RUN's own manufactured-return
+; logic found instead was leftover from further up our own call chain -
+; confirmed live via VICE: with no program even stored, plain "RUN"
+; alone computed a manufactured return address that pointed at its own
+; stack-reset code, an infinite loop matching the exact "RUN hangs"
+; symptom reported live.
 OldCmd
         jsr     BAS_CHRGOT
-        jmp     BAS_EXECOLD
+        jsr     BAS_EXECOLD
+        jmp     $a7ae
 OkNew
         sei                     ; Hold interrupts off for the entire Bank 1
                                  ; visit, not just bank_call/bank_return_
@@ -455,14 +446,14 @@ OkExt
 ; BASIC keyword - ON GOTO/ON GOSUB - making the resulting syntax error
 ; confusing rather than obvious).
 ExtBankTab
-        !byte   1, 1, 1, 1, 1, 1        ; COLOR BORDER BACKGROUND LOCATE PRINTAT HELP
+        !byte   1, 1, 1, 1              ; COLOR LOCATE PRINTAT HELP
         !byte   2, 2, 2, 2, 2, 2, 2, 2  ; HIRES MULTI TEXT PLOT LINE BOX CIRCLE PAINT
         !byte   3, 3, 3, 3              ; SPRITEON SPRITEOFF SPRITECOLOR SPRITE
-        !byte   5, 5, 5, 5              ; DOKE DUMP FILL MOVE
+        !byte   5, 5, 5                 ; DUMP FILL MOVE
         !byte   6, 6, 6                 ; CARTINFO BANKS BANK
         !byte   8, 8, 8, 8, 8           ; SOUND VOLUME WAVE ADSR FILTER
         !byte   9, 9, 9                 ; FLASHERASE FLASHLOAD FLASHVERIFY
-        !byte   10, 10, 10, 10, 10, 10, 10 ; DIR DEVICE CD DELETE RENAME DLOAD DSAVE
+        !byte   10, 10, 10, 10, 10      ; DIR DEVICE CD DELETE RENAME
         !byte   11, 11                  ; HTTPGET TELNET
         !byte   0                       ; JET - replays the boot flyby;
                                           ; bank 0, same bank menu_open
@@ -472,17 +463,17 @@ ExtBankTab
                                           ; bank 0 (trivial, no real bank
                                           ; dependency either way)
 ExtSlotLoTab
-        !byte   <SLOT_COLOR, <SLOT_BORDER, <SLOT_BACKGROUND
+        !byte   <SLOT_COLOR
         !byte   <SLOT_LOCATE, <SLOT_PRINTAT, <SLOT_HELP
         !byte   <SLOT_HIRES, <SLOT_MULTI, <SLOT_TEXT, <SLOT_PLOT
         !byte   <SLOT_LINE, <SLOT_BOX, <SLOT_CIRCLE, <SLOT_PAINT
         !byte   <SLOT_SPRITEON, <SLOT_SPRITEOFF, <SLOT_SPRITECOLOR, <SLOT_SPRITE
-        !byte   <SLOT_DOKE, <SLOT_DUMP, <SLOT_FILL, <SLOT_MOVE
+        !byte   <SLOT_DUMP, <SLOT_FILL, <SLOT_MOVE
         !byte   <SLOT_CARTINFO, <SLOT_BANKS, <SLOT_BANK
         !byte   <SLOT_SOUND, <SLOT_VOLUME, <SLOT_WAVE, <SLOT_ADSR, <SLOT_FILTER
         !byte   <SLOT_FLASHERASE, <SLOT_FLASHLOAD, <SLOT_FLASHVERIFY
         !byte   <SLOT_DIR, <SLOT_DEVICE, <SLOT_CD, <SLOT_DELETE
-        !byte   <SLOT_RENAME, <SLOT_DLOAD, <SLOT_DSAVE
+        !byte   <SLOT_RENAME
         !byte   <SLOT_HTTPGET, <SLOT_TELNET
         !byte   <SLOT_JET
         !byte   <SLOT_REBOOT
@@ -665,11 +656,11 @@ OldEvalHadSpace
 ; JOYRIGHT/JOYFIRE must all be tried before plain JOY.
 ExtFuncBankTab
         !byte   4, 4, 4, 4, 4, 4   ; JOYUP JOYDOWN JOYLEFT JOYRIGHT JOYFIRE JOY
-        !byte   5, 5, 5, 5         ; DEEK FIND HEX$ DEC$
+        !byte   5, 5, 5            ; FIND HEX$ DEC$
 ExtFuncSlotLoTab
         !byte   <SLOT_JOYUP, <SLOT_JOYDOWN, <SLOT_JOYLEFT
         !byte   <SLOT_JOYRIGHT, <SLOT_JOYFIRE, <SLOT_JOY
-        !byte   <SLOT_DEEK, <SLOT_FIND, <SLOT_HEXDOLLAR, <SLOT_DECDOLLAR
+        !byte   <SLOT_FIND, <SLOT_HEXDOLLAR, <SLOT_DECDOLLAR
 
 ; ============================================================
 ; F1 watcher, wedged into the jiffy IRQ (~60Hz) via $0314/$0315
@@ -707,6 +698,28 @@ ExtFuncSlotLoTab
 ; this (now very stretched-out) IRQ finally tail-chains into $EA31 and
 ; RTIs back into whatever BASIC was doing when F1 first interrupted it.
 irq_hook
+; Re-enforce our boot colors (black border/background) every single
+; tick, unconditionally. Real, unmodified BASIC ROM calls RESTOR (real
+; KERNAL $FD15, which includes a VIC-II color-table reinit) as part of
+; its own normal "return cleanly to READY" handling - confirmed live by
+; tracing an ordinary "10 PRINT "HELLO"" through to its natural end:
+; $A660's CLR-equivalent resets the stack, RTS's through a manufactured
+; address into $E385, which reuses the KERNAL error-message vector
+; ($0300) with X=$80 (not a real error number - BASIC's own "clean
+; restart" signal) to reach $A474 (print READY.) by way of $FE66's
+; RESTOR/IOINIT/color-table-copy. This is completely standard, always-
+; happens-on-every-C64 behavior - invisible on a stock machine because
+; it resets colors to the SAME default blue/light-blue already showing
+; at boot. It only became visible here because we customize the boot
+; colors away from that default, so the always-happening reset now
+; visibly clobbers ours. Rather than trying to intercept every KERNAL/
+; BASIC path that can trigger it (program end, RUN/STOP, real errors,
+; ...), just keep winning the fight every tick - self-healing regardless
+; of what causes the drift.
+        lda     #$00
+        sta     $d020
+        sta     $d021
+
         lda     basic_ext_countdown
         beq     irq_ext_checked
         dec     basic_ext_countdown
@@ -799,15 +812,98 @@ irq_chain
 ; screen editor read from, so stealing from it here would eat
 ; keystrokes out from under whatever's running. Returns Z=1 (BEQ taken)
 ; if F1 is currently held down, Z=0 if not. Trashes A.
+;
+; Restores $DC00 to whatever it actually held on entry, not a hardcoded
+; $FF - this runs unconditionally on every single jiffy tick, before
+; $EA31's own real keyboard scan gets its turn, and ALWAYS forcing $DC00
+; to $FF here (regardless of what it was) was clobbering whatever column
+; $EA31's own scan expected to see there, intermittently corrupting
+; recognition of specific keys - confirmed live: RETURN specifically
+; stopped being recognized as end-of-line (the screen editor kept
+; treating the line as still open, cursor just nudging right with no
+; line ever getting submitted to BASIC) until a workaround keystroke was
+; typed first. Saving/restoring the real prior value instead of
+; assuming a fixed idle state fixes this without needing to know
+; $EA31's own exact scan-timing expectations.
 read_f1
+        lda     $dc00
+        pha                 ; save whatever column was selected before
         lda     #$fe        ; select matrix column 0
         sta     $dc00
         lda     $dc01
         and     #$10        ; row bit 4 = F1
-        pha
-        lda     #$ff        ; deselect - back to idle column state before
-        sta     $dc00       ; $EA31's own scan (below) drives it fresh
+        tay                 ; stash the result while restoring $dc00
         pla
+        sta     $dc00       ; restore the original column selection
+        tya                 ; A = result again (also sets Z from it, like
+        rts                  ; the original PLA-before-RTS did)
+
+; RESTORE (alone, no RUN/STOP) fires a real 6502 NMI - unlike IRQ, this
+; can't be masked with SEI and fires no matter what's running. Verified
+; against the real KERNAL NMI-entry disassembly ($FE43/$FE47): it PHAs
+; A, TXA/PHA, TYA/PHA (in that order), checks CIA2 for the actual NMI
+; source, and - for the RESTORE-key/autostart-scan path - does a plain
+; "JMP ($8002)" straight into whatever bank 0's own CBM80 header
+; declares, no RTI of its own. That word used to just repeat cart_start,
+; meaning every single RESTORE press re-ran full cold boot (RAMTAS
+; memory test, reinstalling the F1 IRQ hook, JMP straight into BASIC's
+; own cold start again) - non-maskably, from literally any point in
+; whatever was running, including mid-IRQ.
+;
+; Fix: unwind exactly what $FE47 pushed (Y first - it was pushed last -
+; then X, then A) and RTI normally, same as a real NMI service routine
+; that has nothing to do. Makes RESTORE alone an inert no-op while this
+; cart is active. Has to live here, resident, rather than in bank 0's
+; own ROM (despite bank 0's own CBM80 header word pointing straight at
+; it) - $0318/$0319 (bank0_content.asm's cart_start) point at it
+; directly too, unconditionally, bypassing the header/$FD02 check
+; entirely (see that hookup's own comment for why), so it has to be
+; reachable no matter which bank happens to be switched in when NMI
+; fires - the same reasoning irq_hook itself already follows.
+nmi_safe
+        pla
+        tay
+        pla
+        tax
+        pla
+        rti
+
+; Checked from the very top of ConvertToTokens below (JSR, not a vector
+; hookup) - real KERNAL RESTOR ($FD15) silently resets $0314/$0315 and
+; $0318/$0319 back to their own stock defaults every single time ANY
+; statement completes and control returns to direct mode, not just
+; after a real error. Confirmed live: after a single direct-mode
+; "PRINT DEC$(...)" finished, $0314/$0315 read back as stock $EA31, not
+; irq_hook - RESTOR had disconnected our entire jiffy-IRQ system (F1
+; menu, jet animation, boot-color enforcement) from ever running again.
+; $0302/$0303 (IMAIN, where BASIC's own $A480 resumes its main loop
+; right after RESTOR runs) looked like the ideal one-shot repair point,
+; but turned out to be inside RESTOR's own reset range too - reads back
+; as stock $A483 after the same event, confirmed live the same way.
+; $0304-$030B (BASIC's OWN vector range, not KERNAL's) is the one
+; that's actually confirmed to survive, twice now - so instead of
+; relying on any single post-reset hook, just check-and-repair from
+; here, which fires on every single typed line (direct-mode or
+; program-line entry) regardless. Has to live here, resident, for the
+; same reason nmi_safe above does: cur_bank could be anything by the
+; time this runs.
+reinstall_hooks
+        lda     $0314
+        cmp     #<irq_hook
+        beq     reinstall_hooks_done   ; already installed - common case,
+                                         ; skip the rest cheaply
+        lda     #<irq_hook
+        sta     $0314
+        lda     #>irq_hook
+        sta     $0315
+        lda     #<nmi_safe
+        sta     $0318
+        lda     #>nmi_safe
+        sta     $0319
+        lda     #$00
+        sta     $d020
+        sta     $d021
+reinstall_hooks_done
         rts
 
 ; --- Boot splash jet-flyby animation ---
@@ -1270,6 +1366,12 @@ restore_screen_loop
 ; reproducing that faithfully is far safer than re-deriving its edge
 ; cases by hand. ---
 ConvertToTokens
+        jsr     reinstall_hooks ; cheap common-case check (single CMP+BEQ
+                                  ; when already installed) - see that
+                                  ; routine's own comment for why this
+                                  ; needs to run on every typed line
+                                  ; rather than relying on a one-shot
+                                  ; post-RESTOR hook
         ldx     BAS_TXTPTR
         ldy     #4
         sty     BAS_GARBFL
@@ -1606,10 +1708,6 @@ NewTab
 ExtTab
         !text   "COLO"
         !byte   'R'+$80
-        !text   "BORDE"
-        !byte   'R'+$80
-        !text   "BACKGROUN"
-        !byte   'D'+$80
         !text   "LOCAT"
         !byte   'E'+$80
         !text   "PRINTA"
@@ -1639,8 +1737,6 @@ ExtTab
         !text   "SPRITECOLO"
         !byte   'R'+$80
         !text   "SPRIT"
-        !byte   'E'+$80
-        !text   "DOK"
         !byte   'E'+$80
         !text   "DUM"
         !byte   'P'+$80
@@ -1680,10 +1776,6 @@ ExtTab
         !byte   'E'+$80
         !text   "RENAM"
         !byte   'E'+$80
-        !text   "DLOA"
-        !byte   'D'+$80
-        !text   "DSAV"
-        !byte   'E'+$80
         !text   "HTTPGE"
         !byte   'T'+$80
         !text   "TELNE"
@@ -1711,8 +1803,6 @@ ExtFuncTab
         !byte   'E'+$80
         !text   "JO"
         !byte   'Y'+$80
-        !text   "DEE"
-        !byte   'K'+$80
         !text   "FIN"
         !byte   'D'+$80
         !text   "HEX"

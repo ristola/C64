@@ -40,13 +40,15 @@
 ; that has nothing to do. Makes RESTORE alone an inert no-op while this
 ; cart is active, matching how plenty of real commercial carts
 ; deliberately disable it rather than risk a mid-execution reinit.
-nmi_safe
-        pla
-        tay
-        pla
-        tax
-        pla
-        rti
+;
+; Lives in resident.asm, not here, despite the header word above
+; pointing straight at it from bank 0's own ROM - $0318/$0319 (below)
+; point at it directly too, unconditionally, bypassing the header/$FD02
+; check entirely (see that hookup's own comment for why), so it has to
+; be reachable no matter which bank happens to be switched in when NMI
+; fires - the exact same reasoning irq_hook itself already follows.
+; This label reference still resolves correctly from here since
+; bank_driver.asm assembles this file and resident.asm as one unit.
 
 ; --- Fixed-slot jump table entries for this bank (slots.asm) ---
 !fill SLOT_MENU_OPEN-*, $ff
@@ -85,12 +87,42 @@ cart_start
         sta     $0314
         lda     #>irq_hook
         sta     $0315
+
+; Point the REAL NMI vector ($0318/$0319, also just reset to its KERNAL
+; default by RESTOR above) straight at nmi_safe, instead of leaving it at
+; that default. The header's own $8002/$8003 "NMI vector" is NOT this -
+; it's only consulted by the real KERNAL's default $0318 handler ($FE47),
+; which re-checks the CBM80 signature at $8004 via $FD02 every single
+; time an NMI fires, live, and only redirects through $8002 if that
+; check currently succeeds. Since NMI (unlike IRQ) can't be masked by
+; SEI, it can land at literally any instruction boundary, including mid-
+; bank_call while some OTHER bank (1, 5, 11, ...) is switched in for an
+; ordinary command like HELP or DEC$ - at that instant $8004 holds
+; whatever that bank's own ROM starts with, not "CBM80", so the check
+; fails and NMI falls straight through to the real, destructive RESTORE-
+; key handler (RESTOR/IOINIT/VIC-II color-table reinit) instead of our
+; safe stub - confirmed live via VICE: a watchpoint on $D020/$D021 (the
+; border/background color registers) caught this exact sequence writing
+; the KERNAL's own default blue/light-blue palette mid-session, with the
+; hardware NMI vector ($FFFA) confirmed unmodified (still $FE43, as it
+; always is - real KERNAL ROM, not ours to change) and the call chain
+; traced stack-to-disassembly through $FE66 (RESTOR) -> $FE69 (IOINIT)
+; -> $FE6C (color table copy, where the watch fired) -> $A002 (BASIC's
+; own warm-start vector) - this is the actual, long-chased "screen
+; resets to stock colors" bug, not a zero-page/TEMPST issue after all.
+; Bypassing the header/$FD02 check entirely here removes the dependency
+; on which bank happens to be active when NMI fires.
+        lda     #<nmi_safe
+        sta     $0318
+        lda     #>nmi_safe
+        sta     $0319
+
         lda     #$00
         sta     f1_state
         sta     cur_bank    ; hardware always resets with bank 0 selected -
                              ; keep the RAM shadow in sync from the start
-        sta     jet_charset_ready  ; force jet_charset_setup's full 2KB
-                                     ; copy+patch on its first run
+        sta     jet_charset_ready  ; jet_charset_setup below sets this
+                                     ; itself once the copy below completes
         lda     #8
         sta     disk_device ; DISK category's default device number
 
@@ -105,6 +137,23 @@ cart_copy_trampoline
         inx
         cpx     #ram_bank_switch_template_end-ram_bank_switch_template
         bne     cart_copy_trampoline
+
+; Do the jet-flyby charset's one-time 2KB ROM copy right here, while
+; interrupts are still off, instead of lazily on the animation's first
+; jiffy tick (the old approach - jet_setup calling this from inside
+; irq_hook). That copy clears CHAREN for its whole duration (exposing
+; character ROM at $D000, hiding CIA1's keyboard-matrix registers along
+; with everything else normally there), and takes long enough (2048
+; byte-copies) to run past a full jiffy tick period - confirmed live
+; that doing this from inside the IRQ was corrupting the very next
+; keyboard scan afterward: RETURN specifically stopped being recognized
+; as end-of-line (screen editor kept treating the line as still open)
+; until a throwaway keystroke was typed first. Doing the copy here,
+; before CLI, means it's not competing with any jiffy IRQ at all - there
+; isn't one running yet. jet_charset_setup itself sets jet_charset_ready
+; when it finishes, so jet_setup's own later call (from the real
+; animation start) just takes the cheap $D018-repoint path.
+        jsr     jet_charset_setup
 
         cli                 ; re-enable interrupts (delay loop needs the jiffy clock)
 

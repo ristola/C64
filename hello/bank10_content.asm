@@ -1,23 +1,12 @@
-; Bank 10 content: DISK category (DIR/DEVICE/CD/DELETE/RENAME/DLOAD/
-; DSAVE). Real KERNAL disk I/O, verified live in VICE before writing
-; any of this - not guessed at, per this project's established practice
-; (see the [[feedback-verify-c64-facts]] memory: three real bugs in this
-; project already came from unverified ROM/hardware assumptions):
-;   - the exact byte layout of a "$" directory listing (link/size/text/
-;     $00 per entry, filenames stored with the high bit set so a plain
-;     CHROUT loop renders them correctly) was captured directly from a
-;     real load in VICE, not recalled from memory.
-;   - DLOAD's post-load fixup (VARTAB relink + JSR $A659/$A533/JMP
-;     $A480, not BAS_NEWSTT) was found by breakpointing $FFD5 and
-;     single-stepping real BASIC ROM's own "LOAD" command handler.
-;   - DSAVE's KERNAL SAVE calling convention (A = zero-page address of
-;     the start pointer, X/Y = end address) was confirmed the same way,
-;     breakpointing $FFD8 during a real "SAVE" command.
-;
-; LOAD/SAVE are stock BASIC V2 keywords already - the tokenizer would
-; never reach our own tables for those exact names (stock keyword table
-; is tried first), so these are DLOAD/DSAVE instead, per slots.asm's
-; own comment on the same collision.
+; Bank 10 content: DISK category (DIR/DEVICE/CD/DELETE/RENAME). Real
+; KERNAL disk I/O, verified live in VICE before writing any of this -
+; not guessed at, per this project's established practice (see the
+; [[feedback-verify-c64-facts]] memory: three real bugs in this project
+; already came from unverified ROM/hardware assumptions): the exact
+; byte layout of a "$" directory listing (link/size/text/$00 per entry,
+; filenames stored with the high bit set so a plain CHROUT loop renders
+; them correctly) was captured directly from a real load in VICE, not
+; recalled from memory.
 ;
 ; DELETE/RENAME/CD are scoped to quoted filename literals only (not a
 ; general string expression via FRMEVL) - real filenames are what every
@@ -54,7 +43,6 @@ KERNAL_CLOSE  = $ffc3
 KERNAL_CHKOUT = $ffc9
 KERNAL_CLRCHN = $ffcc
 KERNAL_LOAD   = $ffd5
-KERNAL_SAVE   = $ffd8
 
 ; --- Fixed-slot jump table entries for this bank (slots.asm) ---
 !fill SLOT_DIR-*, $ff
@@ -67,10 +55,6 @@ KERNAL_SAVE   = $ffd8
         jmp     DeleteCmd
 !fill SLOT_RENAME-*, $ff
         jmp     RenameCmd
-!fill SLOT_DLOAD-*, $ff
-        jmp     DloadCmd
-!fill SLOT_DSAVE-*, $ff
-        jmp     DsaveCmd
 
 ; Reserved slot-table range continues to $80FF regardless of how many
 ; slots this bank actually fills in.
@@ -540,105 +524,3 @@ cd_copy_done
         jsr     send_command
         jmp     bank_return_basic
 
-; --- DLOAD "name": real KERNAL LOAD using the file's own embedded
-; address (secondary 0) - same "replace the current program" semantics
-; as stock LOAD, which is the whole reason this exists (renamed only
-; because the token LOAD is already a stock BASIC V2 keyword). A
-; successful load needs BASIC's own post-load relink (VARTAB + JSR
-; $A659/$A533/JMP $A480) instead of the usual JMP BAS_NEWSTT - see
-; resident.asm's bank_return_load for the live-traced reasoning. ---
-DloadCmd
-        jsr     parse_filename
-        tya                   ; A = length (must move before LDY below
-                                ; clobbers Y, since Y held the length)
-        ldx     #<filename_buf
-        ldy     #>filename_buf
-        jsr     KERNAL_SETNAM
-        lda     #2            ; logical file number
-        ldx     disk_device
-        ldy     #1            ; secondary address 1: use the file's own
-                                ; embedded load address (real LOAD
-                                ; semantics) - correction from an earlier
-                                ; version that used 0 here, which per the
-                                ; real KERNAL LOAD contract actually means
-                                ; "ignore the file's address, force X/Y
-                                ; instead" (see DIR's own corrected
-                                ; comment for the verified source and how
-                                ; this exact mixup was first caught).
-                                ; This only worked by coincidence before:
-                                ; X/Y below is $0801, the same address
-                                ; almost every ordinary BASIC program's
-                                ; own embedded header already specifies,
-                                ; so forcing it explicitly happened to
-                                ; match - would have silently broken for
-                                ; any file whose own address isn't $0801.
-        jsr     KERNAL_SETLFS
-        lda     #0            ; 0 = load
-        ldx     $2b           ; ignored by the KERNAL with SA=1 above,
-        ldy     $2c           ; but harmless to still pass TXTTAB here
-        jsr     KERNAL_LOAD
-        bcs     dload_error
-        stx     $2d           ; VARTAB low = load's returned end address
-        sty     $2e           ; VARTAB high
-        jmp     bank_return_load
-dload_error
-        pha
-        ldx     #0
-dload_err_loop
-        lda     dload_err_msg,x
-        beq     dload_err_msg_done
-        jsr     $ffd2
-        inx
-        bne     dload_err_loop
-dload_err_msg_done
-        pla
-        ldx     #0
-        jsr     print_decimal_word
-        lda     #13
-        jsr     $ffd2
-        jmp     bank_return_basic
-dload_err_msg
-        !text   "?DISK ERROR "
-        !byte   0
-
-; --- DSAVE "name": real KERNAL SAVE, saving the current BASIC program
-; (TXTTAB through VARTAB, exactly what stock SAVE saves) - convention
-; (A = zero-page address of the start pointer, X/Y = end address)
-; confirmed live: breakpointing $FFD8 during a real "SAVE" command
-; showed A=$2B, X/Y = VARTAB. ---
-DsaveCmd
-        jsr     parse_filename
-        tya
-        ldx     #<filename_buf
-        ldy     #>filename_buf
-        jsr     KERNAL_SETNAM
-        lda     #2
-        ldx     disk_device
-        ldy     #0
-        jsr     KERNAL_SETLFS
-        lda     #$2b          ; zero-page address holding the start
-                                ; pointer (TXTTAB, $2B/$2C)
-        ldx     $2d           ; end address low = VARTAB low
-        ldy     $2e           ; end address high = VARTAB high
-        jsr     KERNAL_SAVE
-        bcs     dsave_error
-        jmp     bank_return_basic
-dsave_error
-        pha
-        ldx     #0
-dsave_err_loop
-        lda     dsave_err_msg,x
-        beq     dsave_err_msg_done
-        jsr     $ffd2
-        inx
-        bne     dsave_err_loop
-dsave_err_msg_done
-        pla
-        ldx     #0
-        jsr     print_decimal_word
-        lda     #13
-        jsr     $ffd2
-        jmp     bank_return_basic
-dsave_err_msg
-        !text   "?DISK ERROR "
-        !byte   0

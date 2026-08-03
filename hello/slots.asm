@@ -22,8 +22,6 @@ SLOT_CLS              = SLOT_BASE + 1*SLOT_SIZE  ; bank 1
 
 ; --- SCREEN + HELP (bank 1) ---
 SLOT_COLOR            = SLOT_BASE + 2*SLOT_SIZE
-SLOT_BORDER           = SLOT_BASE + 3*SLOT_SIZE
-SLOT_BACKGROUND       = SLOT_BASE + 4*SLOT_SIZE
 SLOT_LOCATE           = SLOT_BASE + 5*SLOT_SIZE
 SLOT_PRINTAT          = SLOT_BASE + 6*SLOT_SIZE
 SLOT_HELP             = SLOT_BASE + 7*SLOT_SIZE
@@ -53,11 +51,9 @@ SLOT_JOYRIGHT         = SLOT_BASE + 24*SLOT_SIZE
 SLOT_JOYFIRE          = SLOT_BASE + 25*SLOT_SIZE
 
 ; --- MEMORY (bank 5) ---
-SLOT_DOKE             = SLOT_BASE + 26*SLOT_SIZE
 SLOT_DUMP             = SLOT_BASE + 27*SLOT_SIZE
 SLOT_FILL             = SLOT_BASE + 28*SLOT_SIZE
 SLOT_MOVE             = SLOT_BASE + 29*SLOT_SIZE
-SLOT_DEEK             = SLOT_BASE + 30*SLOT_SIZE  ; function
 SLOT_FIND             = SLOT_BASE + 31*SLOT_SIZE  ; function
 SLOT_HEXDOLLAR        = SLOT_BASE + 32*SLOT_SIZE  ; function, HEX$
 SLOT_DECDOLLAR        = SLOT_BASE + 33*SLOT_SIZE  ; function, DEC$
@@ -81,17 +77,12 @@ SLOT_FLASHERASE       = SLOT_BASE + 42*SLOT_SIZE
 SLOT_FLASHLOAD        = SLOT_BASE + 43*SLOT_SIZE
 SLOT_FLASHVERIFY      = SLOT_BASE + 44*SLOT_SIZE
 
-; --- DISK (bank 10). LOAD/SAVE are stock BASIC V2 keywords already -
-; the tokenizer would never even reach our tables for those exact
-; names (stock keyword table is tried first), so ours are DLOAD/DSAVE
-; instead, not LOAD/SAVE. ---
+; --- DISK (bank 10) ---
 SLOT_DIR              = SLOT_BASE + 45*SLOT_SIZE
 SLOT_DEVICE           = SLOT_BASE + 46*SLOT_SIZE
 SLOT_CD               = SLOT_BASE + 47*SLOT_SIZE
 SLOT_DELETE           = SLOT_BASE + 48*SLOT_SIZE
 SLOT_RENAME           = SLOT_BASE + 49*SLOT_SIZE
-SLOT_DLOAD            = SLOT_BASE + 50*SLOT_SIZE
-SLOT_DSAVE            = SLOT_BASE + 51*SLOT_SIZE
 
 ; --- NETWORK (bank 11, Ultimate Command Interface - see
 ; ultimate_sdk.asm's header: UNTESTED, no way to verify without real
