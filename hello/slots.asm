@@ -83,6 +83,8 @@ SLOT_DEVICE           = SLOT_BASE + 46*SLOT_SIZE
 SLOT_CD               = SLOT_BASE + 47*SLOT_SIZE
 SLOT_DELETE           = SLOT_BASE + 48*SLOT_SIZE
 SLOT_RENAME           = SLOT_BASE + 49*SLOT_SIZE
+SLOT_DLOAD            = SLOT_BASE + 50*SLOT_SIZE
+SLOT_DSAVE            = SLOT_BASE + 51*SLOT_SIZE
 
 ; --- NETWORK (bank 11, Ultimate Command Interface - see
 ; ultimate_sdk.asm's header: UNTESTED, no way to verify without real
@@ -92,8 +94,9 @@ SLOT_TELNET           = SLOT_BASE + 53*SLOT_SIZE
 
 ; --- Boot splash one-time setup (bank 0) - tower_anim_start/
 ; jet_charset_setup/jet_bold_font/jet_sprite live in
-; bank0_content.asm now, not resident.asm: resident.asm has a hard 2KB
-; budget ($9800-$9FFF) shared by every bank, and this is ~350 bytes of
+; bank0_content.asm now, not resident.asm: resident.asm has a hard
+; ~2KB budget ($97C0-$9FFF) shared by every bank, and this is ~350
+; bytes of
 ; code+data that only ever runs once, at the exact moment cur_bank is
 ; still guaranteed 0 (right after cold boot, before any BASIC extension
 ; command could plausibly have run yet) - safe to reach via a one-time
@@ -110,7 +113,8 @@ SLOT_TOWER_ANIM_START = SLOT_BASE + 54*SLOT_SIZE
 ; init.
 SLOT_JET              = SLOT_BASE + 55*SLOT_SIZE
 SLOT_REBOOT           = SLOT_BASE + 56*SLOT_SIZE  ; bank 0
-; slots 57-59 reserved for future banks/commands
+SLOT_RENUM            = SLOT_BASE + 57*SLOT_SIZE  ; bank 1
+; slots 58-59 reserved for future banks/commands
 ;
 ; install_basic_ext itself does NOT get a slot - unlike menu_open (real
 ; per-bank content in Bank 0) or ClsCmd/HexCmd (real per-bank content in
@@ -246,6 +250,59 @@ jet_charset_ready    = $03a8   ; 0 until jet_charset_setup's one-time
                                  ; Explicitly zeroed in cart_start
                                  ; (bank0_content.asm) - RAM isn't
                                  ; guaranteed to power on at 0
+
+; --- RENUM (bank 1) scratch - continues right after jet_charset_ready.
+; renum_pval doubles as both the RENUM-argument accumulator (before the
+; rebuild starts) and the in-line-reference-parsing accumulator (during
+; the rebuild) - the two never run concurrently, same reasoning as
+; reusing resident.asm's pdw_lo/pdw_hi as this routine's own *10+digit
+; scratch (see bank1_content.asm's renum_x10_plus_digit). ---
+renum_start           = $03a9   ; 2 bytes: first new line number
+renum_step            = $03ab   ; 2 bytes: increment between lines
+renum_curnew          = $03ad   ; 2 bytes: new number for the line
+                                  ; currently being rebuilt
+renum_pval            = $03af   ; 2 bytes: generic parsed-decimal-value
+                                  ; accumulator (see comment above)
+renum_newval          = $03b1   ; 2 bytes: renum_lookup's resolved
+                                  ; new line number for renum_pval
+renum_len             = $03b3   ; 2 bytes: final rebuilt-program length,
+                                  ; used only by the RENUM_BUF copy-back
+
+; --- DeviceCmd's own *10+digit scratch (bank 10) - continues right
+; after renum_len. Not zero page - no indirect addressing needed. ---
+dv_tmp_lo             = $03b5
+dv_tmp_hi             = $03b6
+
+; --- RENUM's own zero-page pointers (bank 1) - only ever touched during
+; RENUM's own SEI-held, no-nested-BASIC-calls rebuild loop (the one
+; exception, real BASIC ROM's LINKPRG at $a533, isn't called until
+; after every renum_src/renum_dest/renum_search use is finished - see
+; bank1_content.asm), so reusing zero page here is safe on the same
+; grounds bank10's scmd_ptr already established: nothing else needs
+; these bytes during that specific window. ---
+renum_src             = $24     ; 2 bytes: walks the ORIGINAL program
+renum_dest            = $26     ; 2 bytes: writes into RENUM_BUF
+renum_search          = $28     ; 2 bytes: renum_lookup's own walk,
+                                  ; independent of renum_src since a
+                                  ; lookup runs while renum_src is
+                                  ; mid-line
+
+; --- RENUM's scratch program-rebuild buffer (bank 1) - reuses the same
+; $C000-$CFFF window as the DISK category's buffers above (scr_save_buf/
+; col_save_buf/misc_save_buf/filename_buf/dir_buffer): safe because only
+; one BASIC+ command ever executes at a time (each holds SEI for its
+; whole bank_call visit), so RENUM can never actually run concurrently
+; with the F1 menu or a DISK command reusing the same bytes. Bounded to
+; 4KB rather than open-ended - EasyFlash's ROML window permanently
+; occupies $8000-$9FFF while this cartridge is active, so RAMTAS itself
+; already caps real BASIC program space below that; a 4KB scratch cap
+; is far more likely to be the real constraint for any program small
+; enough to type in by hand, and RENUM checks against it explicitly
+; (?PROGRAM TOO LARGE FOR RENUM) rather than silently overflowing into
+; col_save_buf/dir_buffer's own bytes. ---
+RENUM_BUF      = $c000
+RENUM_BUF_SIZE = 4096
+RENUM_BUF_END  = RENUM_BUF + RENUM_BUF_SIZE
 
 ; --- EasyFlash registers (verified against real EAPI driver source,
 ; not guessed - see romh_boot.asm and the plan's hardware-facts notes) ---

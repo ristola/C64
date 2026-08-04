@@ -1,11 +1,14 @@
 ; Shared top-level file for every bank's ROML ($8000-$9FFF) build - built
 ; once per bank (13 banks total: 0-12; see build_cart.sh), with
 ; -DBANKNUM=n selecting which bank's content gets included. Content
-; occupies $8000-$97FF; the resident kernel (resident.asm, identical in
-; every bank) always sits at the fixed $9800-$9FFF range (2048 bytes -
-; widened from the original 1024 once the full extended-command token
-; tables pushed past that) so it works regardless of which bank happens
-; to be switched in - see resident.asm for why that matters.
+; occupies $8000-$97BF; the resident kernel (resident.asm, identical in
+; every bank) always sits at the fixed $97C0-$9FFF range (2112 bytes -
+; widened from 1024, then 2048, as the extended-command token tables
+; kept growing) so it works regardless of which bank happens to be
+; switched in - see resident.asm for why that matters. Every bank's own
+; content has huge headroom below this boundary (bank 0, the tightest,
+; still had ~1.2KB free when this last moved) - moving it costs no
+; bank anything meaningful.
 ;
 ; Bank 12 has no content yet (reserved for the later SERIAL plan) and
 ; falls straight through to the padding below with nothing sourced - an
@@ -53,11 +56,11 @@
 }
 ; Bank 12 reserved for the later SERIAL plan - intentionally no content yet.
 
-!if * > $9800 {
-        !error "bank content overflowed into the resident kernel region ($9800)"
+!if * > $97c0 {
+        !error "bank content overflowed into the resident kernel region ($97c0)"
 }
-!fill $9800-*, $ff
-*=$9800
+!fill $97c0-*, $ff
+*=$97c0
 
 !source "resident.asm"
 

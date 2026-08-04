@@ -43,6 +43,24 @@ KERNAL_CLOSE  = $ffc3
 KERNAL_CHKOUT = $ffc9
 KERNAL_CLRCHN = $ffcc
 KERNAL_LOAD   = $ffd5
+KERNAL_SAVE   = $ffd8
+
+; Real BASIC ROM ($A000-$BFFF, always mapped regardless of EasyFlash
+; banking) - verified by static disassembly, same bar as BAS_FRMNUM/
+; BAS_GETADR elsewhere in this project. See bank1_content.asm's RENUM
+; header comment for the full LINKPRG writeup: it relinks a program's
+; line pointers by scanning for each line's own $00 terminator (not by
+; trusting stale ones), leaving the address of the final terminator's
+; own start in $22/$23 - the caller has to add 2 (past that terminator)
+; before storing into VARTAB, confirmed against real NEW's own identical
+; +2 (verified: $a64c-$a657) - exactly what's needed after DLOAD
+; replaces the program, same as after RENUM rewrites it.
+; Deliberately NOT using real BASIC's own post-LOAD tail ($A659, the
+; same shared NEW/CLR routine RENUM's header explains) - it resets the
+; CPU stack and manufactures its own return assuming its caller is
+; BASIC's main loop, which isn't true several JSRs deep inside bank_call.
+BAS_LINKPRG = $a533
+BAS_DATAPTR_RESET = $a81d
 
 ; --- Fixed-slot jump table entries for this bank (slots.asm) ---
 !fill SLOT_DIR-*, $ff
@@ -55,6 +73,10 @@ KERNAL_LOAD   = $ffd5
         jmp     DeleteCmd
 !fill SLOT_RENAME-*, $ff
         jmp     RenameCmd
+!fill SLOT_DLOAD-*, $ff
+        jmp     DloadCmd
+!fill SLOT_DSAVE-*, $ff
+        jmp     DsaveCmd
 
 ; Reserved slot-table range continues to $80FF regardless of how many
 ; slots this bank actually fills in.
@@ -63,19 +85,95 @@ KERNAL_LOAD   = $ffd5
 *=$8100
 
 ; --- DEVICE <n>: set the default device number used by every other
-; DISK command. Any byte value is accepted (0-255, same as BankCmd's
-; numeric-argument pattern in bank6_content.asm) - unlike an out-of-
-; range bank number, a bogus device number can't crash anything; the
-; KERNAL will just report "DEVICE NOT PRESENT" naturally when used. ---
+; DISK command (0-255). Originally used BAS_FRMNUM/BAS_GETADR (real
+; BASIC ROM expression evaluation), the same pattern BankCmd uses - but
+; that's exactly what's live when this locks up on real typed input
+; ("DEVICE 8"), and BankCmd's own use of the identical pattern was never
+; actually confirmed working either (just assumed, per the old comment
+; here - a real bug in this project's own established practice of not
+; trusting an unverified assumption). BASIC's error dispatcher (already
+; documented elsewhere in this project - see resident.asm's OkNew
+; comment on RUN's manufactured-return trick) resets the CPU stack to a
+; fixed point and jumps straight back to the main loop on some error
+; paths, completely bypassing bank_return_basic - which would strand
+; SEI forever and leave cur_bank stuck on 10, exactly matching "locks
+; up". Rather than chase which exact FRMEVL path triggers that without
+; live hardware access, this sidesteps BAS_FRMNUM/BAS_GETADR entirely:
+; a self-contained decimal parser using only BAS_CHRGET/BAS_CHRGOT
+; (plain, balanced ROM routines - confirmed safe throughout this
+; project already) and pdw_lo/pdw_hi as a 16-bit accumulator (free,
+; shared scratch - see resident.asm's print_decimal_word/bank5's
+; dec_to_buf for the same reuse). Same *10+digit shift/add technique as
+; RENUM's renum_x10_plus_digit (bank1_content.asm) - accumulates as a
+; full 16-bit value so a value briefly over 255 mid-parse doesn't wrap
+; and hide a real range error; only checked against 255 once parsing
+; finishes. ---
 DeviceCmd
-        lda     #$00
-        sta     $0d           ; BAS_VALTYP (see bank6_content.asm's
-                                ; BankCmd for why this is a literal here)
-        jsr     BAS_FRMNUM
-        jsr     BAS_GETADR    ; $14/$15 = 16-bit value, low/high
-        lda     $15
-        bne     device_range_error
-        lda     $14
+        jsr     BAS_CHRGOT
+        cmp     #'0'
+        bcs     +
+        jmp     device_syntax_error
++       cmp     #'9'+1
+        bcc     dv_first_ok
+        jmp     device_syntax_error
+dv_first_ok
+        lda     #0
+        sta     pdw_lo
+        sta     pdw_hi
+dv_loop
+        jsr     BAS_CHRGOT
+        cmp     #'0'
+        bcc     dv_parsed
+        cmp     #'9'+1
+        bcs     dv_parsed
+        lda     pdw_hi          ; overflow guard: once the accumulator
+        beq     dv_digit_ok     ; already exceeds 255 (hi nonzero), any
+        jmp     device_range_error     ; further digit only makes it a
+                                         ; bigger out-of-range value -
+                                         ; caught here every iteration,
+                                         ; before another *10+digit can
+                                         ; ever get near a real 16-bit
+                                         ; (65535) wraparound
+dv_digit_ok
+        jsr     BAS_CHRGOT
+        sec
+        sbc     #'0'
+        pha
+        jsr     BAS_CHRGET      ; advance past this digit
+        pla
+        pha                     ; dev_acc = dev_acc*10 + digit, same
+        lda     pdw_lo          ; shift/add sequence as RENUM's
+        asl                     ; renum_x10_plus_digit
+        sta     dv_tmp_lo
+        lda     pdw_hi
+        rol
+        sta     dv_tmp_hi
+        lda     dv_tmp_lo
+        sta     pdw_lo
+        lda     dv_tmp_hi
+        sta     pdw_hi
+        asl     pdw_lo
+        rol     pdw_hi
+        asl     pdw_lo
+        rol     pdw_hi
+        clc
+        lda     pdw_lo
+        adc     dv_tmp_lo
+        sta     pdw_lo
+        lda     pdw_hi
+        adc     dv_tmp_hi
+        sta     pdw_hi
+        pla
+        clc
+        adc     pdw_lo
+        sta     pdw_lo
+        bcc     +
+        inc     pdw_hi
++       jmp     dv_loop
+dv_parsed
+        lda     pdw_hi          ; hi byte clear -> pdw_lo alone (an
+        bne     device_range_error     ; 8-bit value) is already 0-255,
+        lda     pdw_lo                  ; nothing further to check
         sta     disk_device
         jmp     bank_return_basic
 device_range_error
@@ -88,8 +186,21 @@ device_err_loop
         bne     device_err_loop
 device_err_done
         jmp     bank_return_basic
+device_syntax_error
+        ldx     #0
+device_syn_loop
+        lda     device_syn_msg,x
+        beq     device_syn_done
+        jsr     $ffd2
+        inx
+        bne     device_syn_loop
+device_syn_done
+        jmp     bank_return_basic
 device_err_msg
         !text   "?DEVICE OUT OF RANGE (0-255)"
+        !byte   13,0
+device_syn_msg
+        !text   "?SYNTAX ERROR"
         !byte   13,0
 
 ; --- DIR: real "$" directory listing. Loads into dir_buffer (slots.asm)
@@ -120,6 +231,30 @@ device_err_msg
 ; done - the same "safe to reuse between a BAS_GETADR call and printing"
 ; window bank6_content.asm's BankCmd already relies on; nothing in this
 ; loop calls BAS_FRMNUM/BAS_GETADR again to conflict with it. ---
+; Suppresses KERNAL's own "SEARCHING FOR $"/"LOADING" status messages
+; for the duration of the LOAD below (SETMSG, real KERNAL $FF90 -
+; confirmed by disassembling the real ROM: it's just "STA $9D" plus a
+; small shared status-clear tail, so any A value is taken literally as
+; the new MSGFLG). Without this, those messages ran straight into our
+; own first output line with no newline between them ("LOADING0
+; TESTDISK"). Saved/restored around the LOAD call itself (via PHP/PHA,
+; PLA/PLP - PHP specifically to protect LOAD's own carry result, which
+; SETMSG's own internal execution could otherwise clobber) rather than
+; disabled permanently, so a real LOAD/SAVE typed later still shows its
+; own status messages normally.
+; NOTE: this used to also suppress KERNAL's own "SEARCHING FOR $"/
+; "LOADING" messages via SETMSG ($FF90, A=0) around the LOAD call
+; below, purely cosmetic (so they wouldn't run into this command's own
+; first output line). Reverted: confirmed live in VICE that it broke
+; DIR outright (instant blue-screen reset, zero output - matching real
+; BASIC's own native RESTOR/CINT error-recovery path firing, bypassing
+; dir_load_error's own "bcs" check entirely). Real KERNAL LOAD very
+; likely branches to a completely different internal path when its own
+; "show my messages" flag is off - probably assuming it's being called
+; the same way BASIC's own LOAD statement calls it, jumping straight
+; into BASIC's native error reporting on failure instead of just
+; returning with carry set - not worth chasing further to keep a
+; cosmetic improvement; the KERNAL chatter is back but DIR works.
 DirCmd
         lda     #1
         ldx     #<dir_name
@@ -488,6 +623,122 @@ rmc_done
 rmc_msg
         !text   "?MISSING COMMA"
         !byte   13,0
+
+; --- DLOAD "name": loads a PRG into the current BASIC program area,
+; using disk_device instead of needing ",8" every time. Secondary
+; address 0 with X/Y=TXTTAB (not 1, and not the file's own embedded
+; address) - same "force our own address, ignore the file's" convention
+; DIR's own header comment already worked out and verified live for
+; the "$" directory listing, and the same behavior real BASIC's own
+; plain "LOAD" statement uses for a normal (non-",1") program load.
+; After a successful load, TXTTAB has real tokenized program bytes but
+; every OTHER pointer (VARTAB, ARYTAB, STREND, FRETOP) is stale from
+; whatever program used to be there - BAS_LINKPRG plus the same 6
+; pointer copies RENUM's finalize step already does (bank1_content.asm)
+; fixes that up, real BASIC ROM code exercising the exact same path a
+; real LOAD would. ---
+DloadCmd
+        jsr     parse_filename
+        sty     disk_namelen
+        lda     disk_namelen
+        ldx     #<filename_buf
+        ldy     #>filename_buf
+        jsr     KERNAL_SETNAM
+        lda     #1              ; logical file number
+        ldx     disk_device
+        ldy     #0              ; SA=0: force load to X/Y below, ignore
+        jsr     KERNAL_SETLFS    ; the file's own embedded address
+        lda     #0              ; 0 = load (not verify)
+        ldx     $2b             ; TXTTAB low
+        ldy     $2c             ; TXTTAB high
+        jsr     KERNAL_LOAD
+        bcs     dload_error
+        jsr     BAS_LINKPRG
+        clc                     ; VARTAB = end of program: LINKPRG leaves
+        lda     $22             ; $22/$23 pointing AT the final 0000
+        adc     #2              ; terminator's own start, not past it -
+        sta     $2d             ; real NEW ($a64c-$a657, verified) always
+        lda     $23             ; adds 2 for exactly this reason (it
+        adc     #0              ; writes that same terminator at TXTTAB,
+        sta     $2e             ; then sets VARTAB=TXTTAB+2)
+        lda     $2d
+        sta     $2f             ; ARYTAB = VARTAB
+        lda     $2e
+        sta     $30
+        lda     $2d
+        sta     $31             ; STREND = VARTAB
+        lda     $2e
+        sta     $32
+        lda     $37
+        sta     $33             ; FRETOP = MEMSIZ
+        lda     $38
+        sta     $34
+        jsr     BAS_DATAPTR_RESET
+        jmp     bank_return_basic
+dload_error
+        pha
+        ldx     #0
+dload_err_loop
+        lda     dload_err_msg,x
+        beq     dload_err_msg_done
+        jsr     $ffd2
+        inx
+        bne     dload_err_loop
+dload_err_msg_done
+        pla
+        ldx     #0
+        jsr     print_decimal_word
+        lda     #13
+        jsr     $ffd2
+        jmp     bank_return_basic
+dload_err_msg
+        !text   "?LOAD ERROR "
+        !byte   0
+
+; --- DSAVE "name": saves the current BASIC program (TXTTAB to VARTAB)
+; using disk_device, same "no ,8 needed" convenience as DLOAD. KERNAL
+; SAVE's calling convention (A = zero-page address of a 2-byte pointer
+; to the START address, X/Y = END address directly, not a pointer) -
+; confirmed by disassembling the real KERNAL ROM's own $FFD8 jump-table
+; entry (kernal-901227-03.bin, the same image VICE loads): it reads
+; ($00,X) from whatever zero-page address A holds, i.e. #$2b here reads
+; TXTTAB itself as the start address. ---
+DsaveCmd
+        jsr     parse_filename
+        sty     disk_namelen
+        lda     disk_namelen
+        ldx     #<filename_buf
+        ldy     #>filename_buf
+        jsr     KERNAL_SETNAM
+        lda     #1
+        ldx     disk_device
+        ldy     #0
+        jsr     KERNAL_SETLFS
+        lda     #$2b            ; zero-page pointer to the start address
+        ldx     $2d             ; VARTAB low (end address)
+        ldy     $2e             ; VARTAB high
+        jsr     KERNAL_SAVE
+        bcs     dsave_error
+        jmp     bank_return_basic
+dsave_error
+        pha
+        ldx     #0
+dsave_err_loop
+        lda     dsave_err_msg,x
+        beq     dsave_err_msg_done
+        jsr     $ffd2
+        inx
+        bne     dsave_err_loop
+dsave_err_msg_done
+        pla
+        ldx     #0
+        jsr     print_decimal_word
+        lda     #13
+        jsr     $ffd2
+        jmp     bank_return_basic
+dsave_err_msg
+        !text   "?SAVE ERROR "
+        !byte   0
 
 ; --- CD "name": partition/subdirectory change, CMD-drive convention
 ; ("CD:name"). Untested against real hardware (no CMD-style drive

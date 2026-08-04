@@ -207,20 +207,23 @@ install_basic_ext
         sta     $030b
 
 ; Relabel BASIC's own cold-start banner, "**** COMMODORE 64 BASIC V2
-; ****", from V2 to HAM (SHACKMATE's ham-radio branding standing in for
-; the version marker) - verified against a real, unmodified boot's
-; actual screen RAM contents (not guessed): "V2" sits at screen offset
-; $0444/$0445, with a space at $0446 before the closing "****" that
-; "HAM" (one character longer than "V2") absorbs, so nothing after it
-; needs to shift. Only safe to do here, this long after cart_start's
-; jmp ($a000) - BASIC's own cold start prints this banner as part of
-; that jump and would just overwrite the change if done any earlier.
-        lda     #$08        ; screen code 'H'
+; ****", from V2 to SM (SHACKMATE's initials standing in for the version
+; marker) in green - verified against a real, unmodified boot's actual
+; screen RAM contents (not guessed): "V2" sits at screen offset
+; $0444/$0445, and since "SM" is the same length, the following space at
+; $0446 (before the closing "****") needs no shift, same as stock BASIC's
+; own layout. Color RAM mirrors screen RAM 1:1 at $D800+offset, so
+; $0444/$0445's color cells are $D844/$D845. Only safe to do here, this
+; long after cart_start's jmp ($a000) - BASIC's own cold start prints
+; this banner as part of that jump and would just overwrite the change
+; if done any earlier.
+        lda     #$13        ; screen code 'S'
         sta     $0444
-        lda     #$01        ; screen code 'A'
-        sta     $0445
         lda     #$0d        ; screen code 'M'
-        sta     $0446
+        sta     $0445
+        lda     #5          ; green
+        sta     $d844
+        sta     $d845
         rts
 
 ; Prints " NOT YET IMPLEMENTED" + newline - the common tail every
@@ -414,9 +417,32 @@ CmdSlotLoTab
 ; shape as OkNew, just one extra byte to consume since the "which
 ; command" information lives in a second byte instead of being baked
 ; into the token value itself.
+; The index byte is raw binary (1-based position in ExtTab), not real
+; BASIC text - it can legitimately be ANY byte value, including $20.
+; Real BAS_CHRGET treats $20 as a space and silently skips past it to
+; the next byte instead of returning it (correct behavior for actual
+; typed text, since spaces are meant to be transparently skippable -
+; the same behavior this project's own RENUM/DEVICE argument parsers
+; rely on elsewhere). Confirmed live in VICE via single-instruction
+; tracing: DIR is ExtTab's 32nd entry (32 = $20), so BAS_CHRGET silently
+; skipped its index byte and read the following byte (the statement's
+; own $00 terminator) instead, computing X=$FF and, a few instructions
+; later inside OkExt's error-message ASCII-digit check (SBC #$30),
+; A=$D0 - the exact garbage bank number that ended up written to
+; EASYFLASH_BANK and jammed the machine. Fixed by reading the index
+; byte directly ((BAS_TXTPTR),Y then a manual increment matching
+; BAS_CHRGET's own "advance, then read" order) instead of going through
+; BAS_CHRGET's space-skip/digit-check logic at all - any future ExtTab
+; entry that happens to land on position 32 (or any other byte value
+; BAS_CHRGET treats specially) is safe now, not just DIR today.
 OkExt
         sei
-        jsr     BAS_CHRGET      ; A = index byte (1-based)
+        inc     BAS_TXTPTR
+        bne     +
+        inc     BAS_TXTPTR+1
++       ldy     #0
+        lda     (BAS_TXTPTR),y  ; A = index byte (1-based), raw - no
+                                  ; BAS_CHRGET space-skip hazard
         sec
         sbc     #1              ; 0-based for table indexing
         tax
@@ -426,7 +452,11 @@ OkExt
         sta     call_ptr+1
         lda     ExtBankTab,x
         pha
-        jsr     BAS_CHRGET
+        jsr     BAS_CHRGET      ; safe here - TXTPTR is now AT the index
+                                  ; byte's own position, so this advances
+                                  ; PAST it to the command's real
+                                  ; arguments (real typed text, where
+                                  ; BAS_CHRGET's space-skip is correct)
         pla
         jmp     bank_call
 
@@ -446,14 +476,14 @@ OkExt
 ; BASIC keyword - ON GOTO/ON GOSUB - making the resulting syntax error
 ; confusing rather than obvious).
 ExtBankTab
-        !byte   1, 1, 1, 1              ; COLOR LOCATE PRINTAT HELP
+        !byte   1, 1, 1, 1, 1           ; COLOR LOCATE PRINTAT HELP RENUM
         !byte   2, 2, 2, 2, 2, 2, 2, 2  ; HIRES MULTI TEXT PLOT LINE BOX CIRCLE PAINT
         !byte   3, 3, 3, 3              ; SPRITEON SPRITEOFF SPRITECOLOR SPRITE
         !byte   5, 5, 5                 ; DUMP FILL MOVE
         !byte   6, 6, 6                 ; CARTINFO BANKS BANK
         !byte   8, 8, 8, 8, 8           ; SOUND VOLUME WAVE ADSR FILTER
         !byte   9, 9, 9                 ; FLASHERASE FLASHLOAD FLASHVERIFY
-        !byte   10, 10, 10, 10, 10      ; DIR DEVICE CD DELETE RENAME
+        !byte   10, 10, 10, 10, 10, 10, 10 ; DIR DEVICE CD DELETE RENAME DLOAD DSAVE
         !byte   11, 11                  ; HTTPGET TELNET
         !byte   0                       ; JET - replays the boot flyby;
                                           ; bank 0, same bank menu_open
@@ -464,7 +494,7 @@ ExtBankTab
                                           ; dependency either way)
 ExtSlotLoTab
         !byte   <SLOT_COLOR
-        !byte   <SLOT_LOCATE, <SLOT_PRINTAT, <SLOT_HELP
+        !byte   <SLOT_LOCATE, <SLOT_PRINTAT, <SLOT_HELP, <SLOT_RENUM
         !byte   <SLOT_HIRES, <SLOT_MULTI, <SLOT_TEXT, <SLOT_PLOT
         !byte   <SLOT_LINE, <SLOT_BOX, <SLOT_CIRCLE, <SLOT_PAINT
         !byte   <SLOT_SPRITEON, <SLOT_SPRITEOFF, <SLOT_SPRITECOLOR, <SLOT_SPRITE
@@ -473,7 +503,7 @@ ExtSlotLoTab
         !byte   <SLOT_SOUND, <SLOT_VOLUME, <SLOT_WAVE, <SLOT_ADSR, <SLOT_FILTER
         !byte   <SLOT_FLASHERASE, <SLOT_FLASHLOAD, <SLOT_FLASHVERIFY
         !byte   <SLOT_DIR, <SLOT_DEVICE, <SLOT_CD, <SLOT_DELETE
-        !byte   <SLOT_RENAME
+        !byte   <SLOT_RENAME, <SLOT_DLOAD, <SLOT_DSAVE
         !byte   <SLOT_HTTPGET, <SLOT_TELNET
         !byte   <SLOT_JET
         !byte   <SLOT_REBOOT
@@ -542,7 +572,16 @@ EvaluateFunction
                                  ; stack-based reentrancy - hold interrupts
                                  ; off for this whole round trip too, not
                                  ; just the statement-dispatch path.
-        jsr     BAS_CHRGET      ; A = index byte (1-based)
+; Same raw-index-byte hazard as OkExt above (see its comment for the
+; full live-traced writeup) - not currently reachable since ExtFuncTab
+; has under 32 entries, but fixed the same way regardless so it can't
+; become a landmine the moment a future function pushes past position
+; 32.
+        inc     BAS_TXTPTR
+        bne     +
+        inc     BAS_TXTPTR+1
++       ldy     #0
+        lda     (BAS_TXTPTR),y  ; A = index byte (1-based), raw
         sec
         sbc     #1
         tax
@@ -552,7 +591,7 @@ EvaluateFunction
         sta     call_ptr+1
         lda     ExtFuncBankTab,x
         pha
-        jsr     BAS_CHRGET      ; advance past the index byte
+        jsr     BAS_CHRGET      ; safe here - see OkExt's comment
         lda     #0
         sta     func_is_string  ; default: numeric result via func_result_
                                  ; hi/lo + $B391 below, unless the target
@@ -719,6 +758,29 @@ irq_hook
         lda     #$00
         sta     $d020
         sta     $d021
+
+; If some OTHER BASIC+ command is already mid-dispatch (cur_bank != 0),
+; skip the animation/F1 checks below entirely rather than risk a nested
+; bank_call landing while a real KERNAL disk operation (DIR/DLOAD's own
+; KERNAL_LOAD) is in progress. Confirmed live in VICE: DIR jammed with
+; a garbage value about to be written to EASYFLASH_BANK (A=$D0, caught
+; via a $DE00 store watchpoint) - real KERNAL disk I/O over the serial
+; bus needs the jiffy clock to work at all, so KERNAL_LOAD very likely
+; re-enables interrupts internally even though our own SEI is nominally
+; held for the whole dispatch; a jiffy tick landing in that window let
+; this nested bank_call (tower_anim/F1, both bank-0-only activities)
+; run while bank 10 was already active for DIR. bank_call's own stack-
+; based design is meant to make nesting safe, and normally does - this
+; guard doesn't depend on fully proving the exact failure mode, it just
+; makes the enabling condition (a nested bank_call while some OTHER
+; bank is already active) structurally impossible: neither the boot
+; animation nor the F1 menu need to run anywhere except while resting
+; at bank 0, so skipping them here costs nothing but a tick or two of
+; delay, picked back up the next time this fires back at bank 0.
+        lda     cur_bank
+        beq     irq_bank_idle
+        jmp     irq_chain
+irq_bank_idle
 
         lda     basic_ext_countdown
         beq     irq_ext_checked
@@ -1714,6 +1776,8 @@ ExtTab
         !byte   'T'+$80
         !text   "HEL"
         !byte   'P'+$80
+        !text   "RENU"
+        !byte   'M'+$80
         !text   "HIRE"
         !byte   'S'+$80
         !text   "MULT"
@@ -1775,6 +1839,10 @@ ExtTab
         !text   "DELET"
         !byte   'E'+$80
         !text   "RENAM"
+        !byte   'E'+$80
+        !text   "DLOA"
+        !byte   'D'+$80
+        !text   "DSAV"
         !byte   'E'+$80
         !text   "HTTPGE"
         !byte   'T'+$80
