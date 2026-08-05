@@ -105,27 +105,54 @@ printat_name
 ; on a different routine) with a "press any key" pause + screen clear
 ; between them, so the first page doesn't scroll away unread before the
 ; second prints. ---
+; help_text1/help_text2 are walked with a 16-bit zero-page pointer, not
+; a plain 8-bit X index: help_text2 has grown past 256 bytes (adding
+; per-keyword color bytes plus the DEL alias pushed it to 304), and an
+; "ldx #0 / inx / bne loop" 8-bit loop silently stops dead the moment X
+; wraps 255->0 - no crash, no error, just print output cutting off mid-
+; word with everything past byte 256 (including help_text2's own
+; trailing HELP_LTBLU color-restore byte) never reached. Confirmed live:
+; that's exactly why DEVICE was rendering as "DEVIC" and HELP wasn't
+; restoring the text color afterward - both the same bug. $14/$15 is
+; free here the same way bank10_content.asm's DIR/send_command already
+; established it's safe to reuse as a plain traversal pointer (nothing
+; else needs it during a direct-mode command's own bank_call window).
 HelpCmd
-        ldx     #0
+        lda     #<help_text1
+        sta     $14
+        lda     #>help_text1
+        sta     $15
 help1_loop
-        lda     help_text1,x
+        ldy     #0
+        lda     ($14),y
         beq     help1_done
         jsr     $ffd2
-        inx
-        bne     help1_loop
+        jsr     help_ptr_inc
+        jmp     help1_loop
 help1_done
         jsr     help_wait_key
-        ldx     #0
+        lda     #<help_text2
+        sta     $14
+        lda     #>help_text2
+        sta     $15
 help2_loop
-        lda     help_text2,x
+        ldy     #0
+        lda     ($14),y
         beq     help2_done
         jsr     $ffd2
-        inx
-        bne     help2_loop
+        jsr     help_ptr_inc
+        jmp     help2_loop
 help2_done
         lda     #13
         jsr     $ffd2
         jmp     bank_return_basic
+
+help_ptr_inc
+        inc     $14
+        bne     help_ptr_inc_done
+        inc     $15
+help_ptr_inc_done
+        rts
 
 ; Prints a small prompt, flushes any stray already-buffered key (same
 ; idea as irq_hook's own GETIN flush in resident.asm), then blocks on
@@ -173,10 +200,14 @@ help_wait_loop
 ; codes (cyan/white), not custom rendering - same mechanism as the
 ; boot banner's own color choices elsewhere in this project.
 HELP_CYAN  = $9f
-HELP_WHITE = $05
 HELP_LTBLU = $9a        ; CINT's own default text color - restored at
                           ; the end so HELP's own color choices don't
                           ; bleed into whatever's typed afterward
+HELP_GREEN = $1e        ; completed keyword/function - real logic, not
+                          ; just a name+"NOT YET IMPLEMENTED" stub (see
+                          ; resident.asm's print_stub_suffix comment)
+HELP_GRAY  = $98        ; still-stubbed keyword/function - update here
+                          ; as each one gets built out for real
 
 help_more_msg
         !byte   13
@@ -192,28 +223,34 @@ help_text1
         !text   "--------------------------------------"
         !byte   13,13
         !text   "SCREEN   "
-        !byte   HELP_WHITE
-        !text   "CLS COLOR LOCATE PRINTAT HELP"
+        !byte   HELP_GREEN
+        !text   "CLS "
+        !byte   HELP_GRAY
+        !text   "COLOR LOCATE PRINTAT "
+        !byte   HELP_GREEN
+        !text   "HELP"
         !byte   13
-        !text   "          RENUM"
+        !text   "          "
+        !byte   HELP_GREEN
+        !text   "RENUM"
         !byte   13
         !byte   HELP_CYAN
         !text   "GRAPHICS "
-        !byte   HELP_WHITE
+        !byte   HELP_GRAY
         !text   "HIRES MULTI TEXT PLOT LINE"
         !byte   13
         !text   "          BOX CIRCLE PAINT"
         !byte   13
         !byte   HELP_CYAN
         !text   "SPRITES  "
-        !byte   HELP_WHITE
+        !byte   HELP_GRAY
         !text   "SPRITE SPRITEON SPRITEOFF"
         !byte   13
         !text   "          SPRITECOLOR"
         !byte   13
         !byte   HELP_CYAN
         !text   "INPUT    "
-        !byte   HELP_WHITE
+        !byte   HELP_GRAY
         !text   "JOY JOYUP JOYDOWN JOYLEFT"
         !byte   13
         !text   "          JOYRIGHT JOYFIRE"
@@ -226,24 +263,28 @@ help_text2
         !text   "--------------------------------------"
         !byte   13,13
         !text   "MEMORY   "
-        !byte   HELP_WHITE
-        !text   "DUMP FILL MOVE FIND HEX$ DEC$"
+        !byte   HELP_GRAY
+        !text   "DUMP FILL MOVE FIND "
+        !byte   HELP_GREEN
+        !text   "HEX DEC"
         !byte   13
         !byte   HELP_CYAN
         !text   "CARTRIDGE"
-        !byte   HELP_WHITE
-        !text   " CARTINFO BANK BANKS FLASHERASE"
+        !byte   HELP_GREEN
+        !text   " CARTINFO BANK BANKS "
+        !byte   HELP_GRAY
+        !text   "FLASHERASE"
         !byte   13
         !text   "          FLASHLOAD FLASHVERIFY"
         !byte   13
         !byte   HELP_CYAN
         !text   "SOUND    "
-        !byte   HELP_WHITE
+        !byte   HELP_GRAY
         !text   "SOUND VOLUME WAVE ADSR FILTER"
         !byte   13
         !byte   HELP_CYAN
         !text   "DISK     "
-        !byte   HELP_WHITE
+        !byte   HELP_GREEN
         !text   "DIR DEVICE CD DELETE/DEL RENAME"
         !byte   13
         !text   "          DLOAD DSAVE"

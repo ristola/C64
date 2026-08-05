@@ -460,6 +460,20 @@ OkExt
         pla
         jmp     bank_call
 
+; A bare extended-function call typed as a whole statement - "HEX(255)"
+; with no PRINT in front - falls through to real BASIC's own implied-
+; LET path and fails with ?SYNTAX ERROR, same as it would for a real
+; stock function (real, unmodified BASIC gives the identical error for
+; a bare "PEEK(53280)" with no PRINT - this isn't a gap specific to our
+; own functions, it's how BASIC has always worked). PRINT HEX(...)/
+; PRINT DEC(...) work correctly and are the supported way to print a
+; result. An attempt at adding implicit-print support for a bare call
+; (substituting BTOK_PRINT and dispatching through BAS_EXECOLD) got far
+; enough via live VICE tracing to reach real BASIC's own FRMEVL, but
+; something inside FRMEVL's own further internals still didn't line up
+; - abandoned as more risk than the convenience was worth; see git
+; history around this comment if picking it back up.
+
 ; One bank number and one slot address per extended command, in the
 ; same order as ExtTab below (index 0 = first ExtTab entry = index byte
 ; value 1, etc.). Real command bodies are stubs ("NOT YET IMPLEMENTED")
@@ -1882,8 +1896,15 @@ ExtFuncTab
         !byte   'Y'+$80
         !text   "FIN"
         !byte   'D'+$80
-        !text   "HEX"
-        !byte   '$'+$80        ; "HEX$" - terminal '$' is the marked byte
-        !text   "DEC"
-        !byte   '$'+$80        ; "DEC$" - terminal '$' is the marked byte
+        !text   "HE"
+        !byte   'X'+$80        ; "HEX" - dropped the trailing $ (the
+                                  ; return type is decided by func_is_
+                                  ; string, set programmatically in
+                                  ; HexDollarFunc/bank5_content.asm, not
+                                  ; by the keyword's own spelling - real
+                                  ; BASIC only requires a $ suffix on the
+                                  ; TARGET variable being assigned, e.g.
+                                  ; "A$=HEX(5)", not on the function name)
+        !text   "DE"
+        !byte   'C'+$80        ; "DEC" - same reasoning
         !byte   0

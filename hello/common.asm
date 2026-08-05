@@ -136,7 +136,7 @@ menu_dispatch_num
 
         cmp     #1
         bne     nd1
-        jsr     feat_graphics_demo
+        jsr     menu_lab_open
         jmp     menu_open
 nd1     cmp     #2
         bne     nd2
@@ -165,6 +165,174 @@ nd7     cmp     #8
 nd8
         jsr     show_stub    ; A = 1-12, looks up the name itself
         jmp     menu_open
+
+; --- CARTRIDGE LAB submenu (item 1) - EPROM/flash chip tools. All six
+; sub-items are stubs for now (no real chip read/write/program logic
+; exists yet - programmer-cartridge/README.md is still concept-stage,
+; no design work done) - routed through the same show_named_stub "NOT
+; YET IMPLEMENTED" screen every other unimplemented top-level item
+; already uses. Own draw/wait/dispatch loop mirrors menu_open/
+; menu_dispatch_num's own shape above (same num_val accumulator, reused
+; safely since the two loops never run concurrently - menu_lab_open is
+; only ever reached via a JSR from within menu_open's own dispatch).
+; Back arrow (unshifted left-arrow key, $5F) returns to the main menu
+; instead of exiting the whole system the way RUN/STOP does at the top
+; level - verify $5F live before relying on it; PETSCII key codes for
+; this project have so far only been confirmed for F1/F3/F5/F7 (menu_
+; open above) and RUN/STOP (menu_wait above), not this one.
+menu_lab_open
+        jsr     menu_lab_draw
+        lda     #$00
+        sta     num_val
+menu_lab_wait
+        jsr     $ffe4
+        beq     menu_lab_wait
+
+        cmp     #$5f         ; back arrow - return to the main menu
+        beq     menu_lab_back
+
+        cmp     #$0d         ; RETURN - dispatch the typed number
+        beq     menu_lab_dispatch_num
+
+        cmp     #$30         ; digit '0'-'9' ?
+        bcc     menu_lab_wait
+        cmp     #$3a
+        bcs     menu_lab_wait
+        pha                  ; save the typed char to echo it
+        jsr     $ffd2
+        pla
+        sec
+        sbc     #$30         ; A = digit value 0-9
+        sta     mul_tmp
+        lda     num_val
+        asl                  ; num_val*2
+        sta     num_val
+        asl                  ; num_val*4
+        asl                  ; num_val*8
+        clc
+        adc     num_val      ; *8 + *2 = *10
+        clc
+        adc     mul_tmp      ; + digit
+        sta     num_val
+        jmp     menu_lab_wait
+menu_lab_back
+        rts                  ; menu_open's own item-1 case does
+                              ; "jmp menu_open" right after this jsr
+                              ; returns, redrawing the main menu
+
+menu_lab_dispatch_num
+        lda     num_val
+        bne     +
+        jmp     menu_lab_open  ; nothing typed - just redraw
++
+        cmp     #7
+        bcs     menu_lab_open  ; >6 - invalid, redraw
+
+        cmp     #1
+        bne     ld1
+        lda     #<lab_name01
+        sta     str_ptr
+        lda     #>lab_name01
+        sta     str_ptr+1
+        jsr     show_named_stub
+        jmp     menu_lab_open
+ld1     cmp     #2
+        bne     ld2
+        lda     #<lab_name02
+        sta     str_ptr
+        lda     #>lab_name02
+        sta     str_ptr+1
+        jsr     show_named_stub
+        jmp     menu_lab_open
+ld2     cmp     #3
+        bne     ld3
+        lda     #<lab_name03
+        sta     str_ptr
+        lda     #>lab_name03
+        sta     str_ptr+1
+        jsr     show_named_stub
+        jmp     menu_lab_open
+ld3     cmp     #4
+        bne     ld4
+        lda     #<lab_name04
+        sta     str_ptr
+        lda     #>lab_name04
+        sta     str_ptr+1
+        jsr     show_named_stub
+        jmp     menu_lab_open
+ld4     cmp     #5
+        bne     ld5
+        lda     #<lab_name05
+        sta     str_ptr
+        lda     #>lab_name05
+        sta     str_ptr+1
+        jsr     show_named_stub
+        jmp     menu_lab_open
+ld5     cmp     #6
+        beq     +
+        jmp     menu_lab_open ; shouldn't happen - already range-checked
++       lda     #<lab_name06
+        sta     str_ptr
+        lda     #>lab_name06
+        sta     str_ptr+1
+        jsr     show_named_stub
+        jmp     menu_lab_open
+
+menu_lab_draw
+        lda     #$93         ; clear screen
+        jsr     $ffd2
+        lda     #<menu_lab_data
+        sta     draw_ptr
+        lda     #>menu_lab_data
+        sta     draw_ptr+1
+        sei                  ; same draw_ptr protection as menu_draw
+        ldy     #$00
+menu_lab_draw_loop
+        lda     (draw_ptr),y
+        beq     menu_lab_draw_done
+        jsr     $ffd2
+        iny
+        bne     menu_lab_draw_loop
+        inc     draw_ptr+1
+        jmp     menu_lab_draw_loop
+menu_lab_draw_done
+        cli
+        rts
+
+lab_name01 !text "READ CHIP" : !byte 0
+lab_name02 !text "PROGRAM CARTRIDGE" : !byte 0
+lab_name03 !text "CLONE CARTRIDGE" : !byte 0
+lab_name04 !text "VERIFY" : !byte 0
+lab_name05 !text "BACKUP CARTRIDGE" : !byte 0
+lab_name06 !text "RESTORE CARTRIDGE" : !byte 0
+
+menu_lab_data
+        !byte   $9f                                        ; cyan
+        !text   "=============================="
+        !byte   $0d
+        !text   "         CARTRIDGE LAB"
+        !byte   $0d
+        !text   "=============================="
+        !byte   $0d,$0d
+        !byte   $9e                                        ; yellow
+        !text   "1. READ CHIP"
+        !byte   $0d
+        !text   "2. PROGRAM CARTRIDGE"
+        !byte   $0d
+        !text   "3. CLONE CARTRIDGE"
+        !byte   $0d
+        !text   "4. VERIFY"
+        !byte   $0d
+        !text   "5. BACKUP CARTRIDGE"
+        !byte   $0d
+        !text   "6. RESTORE CARTRIDGE"
+        !byte   $0d,$0d
+        !byte   $9f                                        ; cyan
+        !text   "<- = BACK"
+        !byte   $0d,$0d
+        !byte   $05                                        ; white
+        !text   "SELECT: "
+        !byte   $00
 
 menu_help
         lda     #<name_help
@@ -269,7 +437,7 @@ name_help   !text "HELP" : !byte 0
 name_rommon !text "ROM MONITOR" : !byte 0
 name_disasm !text "DISASSEMBLER" : !byte 0
 
-name01 !text "GRAPHICS DEMO" : !byte 0
+name01 !text "CARTRIDGE LAB" : !byte 0
 name02 !text "SID MUSIC DEMO" : !byte 0
 name03 !text "SPRITE EDITOR" : !byte 0
 name04 !text "JOYSTICK TESTER" : !byte 0
@@ -299,7 +467,7 @@ menu_data
         !text   "=============================="
         !byte   $0d,$0d
         !byte   $9e                                        ; yellow
-        !text   "1. GRAPHICS DEMO"
+        !text   "1. CARTRIDGE LAB"
         !byte   $0d
         !text   "2. SID MUSIC DEMO"
         !byte   $0d
