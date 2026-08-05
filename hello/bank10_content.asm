@@ -25,6 +25,14 @@ BAS_CHRGET  = $73        ; JSR: get next char, advance TXTPTR
 BAS_CHRGOT  = $79        ; JSR: re-get current char, don't advance
 CHR_QUOTE   = $22
 
+; Real CHROUT color codes (not custom rendering) - same mechanism as
+; bank1_content.asm's HELP_WHITE/HELP_LTBLU/HELP_CYAN.
+DIR_WHITE = $05
+DIR_LTBLU = $9a
+DIR_CYAN  = $9f
+DIR_RED   = $1c
+DIR_GREEN = $1e
+
 ; Zero page $14/$15 is used as a plain traversal pointer by both DIR
 ; (see dir_ptr_inc below) and send_command's scmd_ptr - never at the
 ; same time, since DIR always finishes before DELETE/RENAME/CD/
@@ -40,7 +48,9 @@ KERNAL_SETNAM = $ffbd
 KERNAL_SETLFS = $ffba
 KERNAL_OPEN   = $ffc0
 KERNAL_CLOSE  = $ffc3
+KERNAL_CHKIN  = $ffc6
 KERNAL_CHKOUT = $ffc9
+KERNAL_CHRIN  = $ffcf
 KERNAL_CLRCHN = $ffcc
 KERNAL_LOAD   = $ffd5
 KERNAL_SAVE   = $ffd8
@@ -255,6 +265,20 @@ device_syn_msg
 ; into BASIC's native error reporting on failure instead of just
 ; returning with carry set - not worth chasing further to keep a
 ; cosmetic improvement; the KERNAL chatter is back but DIR works.
+; --- Reads the "$" directory via OPEN/CHKIN/CHRIN instead of the
+; higher-level KERNAL_LOAD - deliberately: LOAD prints its own
+; "SEARCHING FOR $"/"LOADING" status text (real KERNAL behavior, gated
+; by MSGFLG/$9D), and suppressing that via SETMSG was tried and
+; confirmed live in VICE to break DIR outright (instant reset, likely
+; LOAD taking a different internal path - probably assuming BASIC's own
+; error-reporting convention - when its message flag is off). OPEN/
+; CHKIN/CHRIN never runs any of LOAD's own message-printing code at
+; all, sidestepping the whole class of risk rather than fighting it -
+; same low-level primitives send_command already uses successfully
+; elsewhere in this file, just CHKIN (input) instead of CHKOUT
+; (output). $90 is real KERNAL STATUS, updated by CHRIN on every read;
+; nonzero means EOF or a real error either way, both correctly stop the
+; read here. ---
 DirCmd
         lda     #1
         ldx     #<dir_name
@@ -262,19 +286,64 @@ DirCmd
         jsr     KERNAL_SETNAM
         lda     #2            ; logical file number
         ldx     disk_device
-        ldy     #0            ; secondary address 0: use OUR address below
-                                ; (dir_buffer, via X/Y passed to LOAD),
-                                ; not the file's own embedded one
+        ldy     #0            ; secondary address (no LOAD-style embedded-
+                                ; vs-supplied-address distinction here)
         jsr     KERNAL_SETLFS
-        lda     #0            ; 0 = load (not verify)
-        ldx     #<dir_buffer
-        ldy     #>dir_buffer
-        jsr     KERNAL_LOAD
-        bcs     dir_load_error
+        jsr     KERNAL_OPEN
+        bcc     +
+        jmp     dir_load_error
++       ldx     #2
+        jsr     KERNAL_CHKIN
+        bcc     +
+        jmp     dir_chkin_error
++       jsr     KERNAL_CHRIN    ; discard the file's own embedded load
+        jsr     KERNAL_CHRIN    ; address (2 bytes) - every C64 PRG file,
+                                  ; including this pseudo-file, starts
+                                  ; with one; real KERNAL_LOAD always
+                                  ; consumes it itself and never stores it
+                                  ; into the destination buffer, but a raw
+                                  ; CHRIN loop has no such built-in
+                                  ; special case - without this, dir_buffer
+                                  ; started 2 bytes offset from every real
+                                  ; entry, showing garbage numbers first
         lda     #<dir_buffer
         sta     $14
         lda     #>dir_buffer
         sta     $15
+dir_read_loop
+        jsr     KERNAL_CHRIN
+        ldy     #0
+        sta     ($14),y
+        jsr     dir_ptr_inc
+        lda     $90             ; STATUS - nonzero = EOF or error, stop
+        beq     dir_read_loop
+        jsr     KERNAL_CLRCHN
+        lda     #2
+        jsr     KERNAL_CLOSE
+        lda     #<dir_buffer
+        sta     $14
+        lda     #>dir_buffer
+        sta     $15
+        ldx     #0
+dir_header_loop
+        lda     dir_header_msg,x
+        beq     dir_header_done
+        jsr     $ffd2
+        inx
+        bne     dir_header_loop
+dir_header_done
+; --- Just the filenames, one per line, "NAME.TYPE" in white - no block
+; counts, no the disk-name/ID header line, no "BLOCKS FREE." footer.
+; The header entry (disk name + 2-char format ID, e.g. "2A") and the
+; trailing free-space entry are both distinguishable from a real file
+; without any special-case text matching: every REAL file's own size
+; field (the 2 bytes right after the link pointer) is always >= 1
+; block, while the header entry's is always exactly 0 - and the free-
+; space entry has no quoted name at all (dir_find_quote hits the $00
+; terminator before ever finding an opening quote). Both cases skip via
+; dir_skip_silent, which walks to the terminator without printing
+; anything AND without printing the trailing CR real entries get -
+; otherwise the header/footer would still leave behind blank lines. ---
 dir_entry_loop
         ldy     #0
         lda     ($14),y
@@ -282,58 +351,211 @@ dir_entry_loop
         iny
         lda     ($14),y
         ora     disk_namelen
-        beq     dir_done        ; link == $0000 -> end of directory
+        bne     +
+        jmp     dir_done        ; link == $0000 -> end of directory
++
         ldy     #2
         lda     ($14),y
-        pha
+        sta     disk_namelen    ; size, low byte (scratch, see above)
         iny
         lda     ($14),y
-        tax                     ; X = size, high byte
-        pla                     ; A = size, low byte
-        jsr     print_decimal_word
-        lda     #' '
-        jsr     $ffd2
+        sta     disk_namelen2   ; size, high byte (scratch - RENAME's
+                                  ; own use never overlaps DIR's)
         clc                     ; advance past the 4-byte link+size header
         lda     $14
         adc     #4
         sta     $14
-        bcc     dir_find_quote
+        bcc     +
         inc     $15
++
+        lda     disk_namelen
+        ora     disk_namelen2
+        bne     dir_find_quote  ; size != 0 -> a real file, try to print it
+        jmp     dir_skip_silent ; size == 0 -> disk-name/ID header entry
 dir_find_quote
         ldy     #0
         lda     ($14),y
-        beq     dir_line_end    ; terminator with no quote ever found
-        cmp     #CHR_QUOTE
+        bne     +
+        jmp     dir_skip_silent ; terminator, no quote found (free-space
+                                  ; entry - "BLOCKS FREE." has none)
++       cmp     #CHR_QUOTE
         beq     dir_quote_found
         jsr     dir_ptr_inc
         jmp     dir_find_quote
+; Name and type are buffered (not printed as they're walked) so the
+; whole entry's color can be decided up front: red for a name ending
+; ".BIN", green for a "PRG" type, white for everything else. Buffering
+; first (rather than a lookahead/lookback while streaming) is the
+; simplest way to know the name's last 4 chars before any of it has
+; been printed.
 dir_quote_found
         jsr     dir_ptr_inc     ; skip the opening quote
-dir_print_name
+        ldx     #0
+dir_buf_name_loop
         ldy     #0
         lda     ($14),y
-        beq     dir_line_end
+        beq     dir_buf_name_done ; terminator with no closing quote -
+                                    ; shouldn't happen for a real entry,
+                                    ; but don't run off the end
         cmp     #CHR_QUOTE
-        beq     dir_name_done
-        jsr     $ffd2
+        beq     dir_buf_name_closed
+        cpx     #FILENAME_MAXLEN ; don't overrun the buffer on a
+        beq     dir_buf_name_skip ; longer-than-expected name
+        sta     dir_namebuf,x
+        inx
+dir_buf_name_skip
         jsr     dir_ptr_inc
-        jmp     dir_print_name
-dir_name_done
+        jmp     dir_buf_name_loop
+dir_buf_name_closed
         jsr     dir_ptr_inc     ; skip the closing quote
+dir_buf_name_done
+        stx     dir_namebuf_len
+; Padding between the closing quote and the type (PRG/SEQ/etc) is
+; variable-width (the drive right-pads short names to align it), so
+; skip spaces first rather than assuming a fixed offset.
+dir_skip_padding
+        ldy     #0
+        lda     ($14),y
+        beq     dir_buf_type_done
+        cmp     #' '
+        bne     dir_buf_type_loop
+        jsr     dir_ptr_inc
+        jmp     dir_skip_padding
+dir_buf_type_loop
+        ldx     #0
+dir_buf_type_char
+        ldy     #0
+        lda     ($14),y
+        beq     dir_buf_type_done
+        cmp     #' '            ; type is a short word (PRG/SEQ/USR/REL,
+        beq     dir_buf_type_done ; sometimes < or * for locked/splat) -
+        cpx     #3               ; a space marks the end of it
+        beq     dir_buf_type_skip
+        sta     dir_typebuf,x
+        inx
+dir_buf_type_skip
+        jsr     dir_ptr_inc
+        jmp     dir_buf_type_char
+dir_buf_type_done
+        stx     dir_typebuf_len
 dir_skip_rest
         ldy     #0
         lda     ($14),y
-        beq     dir_line_end
+        beq     dir_color_decide
         jsr     dir_ptr_inc
         jmp     dir_skip_rest
+dir_color_decide
+        lda     #0
+        sta     dir_name_has_dot
+        ldx     #0
+dir_scan_dot_loop
+        cpx     dir_namebuf_len
+        beq     dir_scan_dot_done
+        lda     dir_namebuf,x
+        cmp     #'.'
+        bne     dir_scan_dot_next
+        lda     #1
+        sta     dir_name_has_dot
+        jmp     dir_scan_dot_done
+dir_scan_dot_next
+        inx
+        jmp     dir_scan_dot_loop
+dir_scan_dot_done
+        lda     #DIR_WHITE
+        sta     dir_entry_color
+        lda     dir_namebuf_len
+        cmp     #4
+        bcc     dir_check_prg    ; too short to end in ".BIN"
+        sec
+        sbc     #4
+        tax
+        lda     dir_namebuf,x
+        cmp     #'.'
+        bne     dir_check_prg
+        inx
+        lda     dir_namebuf,x
+        cmp     #'B'
+        bne     dir_check_prg
+        inx
+        lda     dir_namebuf,x
+        cmp     #'I'
+        bne     dir_check_prg
+        inx
+        lda     dir_namebuf,x
+        cmp     #'N'
+        bne     dir_check_prg
+        lda     #DIR_RED
+        sta     dir_entry_color
+        jmp     dir_print_entry
+dir_check_prg
+        lda     dir_typebuf_len
+        cmp     #3
+        bne     dir_print_entry
+        lda     dir_typebuf+0
+        cmp     #'P'
+        bne     dir_print_entry
+        lda     dir_typebuf+1
+        cmp     #'R'
+        bne     dir_print_entry
+        lda     dir_typebuf+2
+        cmp     #'G'
+        bne     dir_print_entry
+        lda     #DIR_GREEN
+        sta     dir_entry_color
+dir_print_entry
+        lda     dir_entry_color
+        jsr     $ffd2
+        ldx     #0
+dir_print_name_buf
+        cpx     dir_namebuf_len
+        beq     dir_print_name_buf_done
+        lda     dir_namebuf,x
+        jsr     $ffd2
+        inx
+        jmp     dir_print_name_buf
+dir_print_name_buf_done
+        lda     dir_name_has_dot
+        beq     +
+        jmp     dir_line_end     ; name already has its own extension -
+                                    ; don't also append ".TYPE"
++       lda     #'.'
+        jsr     $ffd2
+        ldx     #0
+dir_print_type_buf
+        cpx     dir_typebuf_len
+        beq     dir_line_end
+        lda     dir_typebuf,x
+        jsr     $ffd2
+        inx
+        jmp     dir_print_type_buf
 dir_line_end
         jsr     dir_ptr_inc     ; skip the $00 terminator - now pointing
                                   ; at the next entry's link
         lda     #13
         jsr     $ffd2
         jmp     dir_entry_loop
+dir_skip_silent
+        ldy     #0
+        lda     ($14),y
+        beq     dir_skip_silent_done
+        jsr     dir_ptr_inc
+        jmp     dir_skip_silent
+dir_skip_silent_done
+        jsr     dir_ptr_inc     ; skip the $00 terminator - no CR, this
+        jmp     dir_entry_loop   ; entry printed nothing
 dir_done
+        lda     #DIR_LTBLU      ; restore CINT's own default text color -
+        jsr     $ffd2            ; see bank1_content.asm's HELP_LTBLU for
+                                  ; why (same idea: don't let a command's
+                                  ; own color choice bleed into whatever
+                                  ; prints after it)
         jmp     bank_return_basic
+dir_chkin_error
+        pha
+        jsr     KERNAL_CLRCHN   ; CHKIN failed after a successful OPEN -
+        lda     #2              ; close the now-orphaned channel before
+        jsr     KERNAL_CLOSE    ; reporting the error
+        pla
 dir_load_error
         pha
         ldx     #0
@@ -360,6 +582,20 @@ dir_ptr_inc_done
 
 dir_name
         !text   "$"
+; Starts on its own fresh line below the typed "DIR" (same reason
+; HELP's own text starts with a leading CR), then "DIRECTORY LISTING"
+; in the same cyan HELP uses for its own category labels, underlined
+; with a dash row matching the title's own width (not a full-page
+; divider like HELP's own 40-dash rule, which spans its wider titles) -
+; DIR_WHITE for the actual filenames right below already; nothing here
+; needs its own color reset before continuing into dir_entry_loop.
+dir_header_msg
+        !byte   13
+        !byte   DIR_CYAN
+        !text   "DIRECTORY LISTING"
+        !byte   13
+        !text   "-----------------"
+        !byte   13,0
 dir_err_msg
         !text   "?DISK ERROR "
         !byte   0

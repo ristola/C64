@@ -340,3 +340,19 @@ FILENAME_MAXLEN  = 16      ; real CBM DOS filename length limit
 dir_buffer       = $c940   ; DIR's "$" directory-listing load target,
                             ; runs to $cfff (1728 bytes - comfortably
                             ; covers realistic directory sizes)
+
+; --- DIR's per-entry name/type buffers (bank 10) - buffered rather
+; than streamed straight to CHROUT so the entry's color (red ".BIN",
+; green "PRG", white otherwise) can be decided before any of it is
+; printed. Sits in misc_save_buf's otherwise-unused tail ($c800-$c8ff -
+; only offsets 0-4 are ever used, for border/background/text color and
+; cursor column/row), well clear of filename_buf at $c900. ---
+dir_namebuf      = $c810   ; up to FILENAME_MAXLEN (16) bytes
+dir_namebuf_len  = $c821
+dir_typebuf      = $c822   ; up to 3 bytes (PRG/SEQ/USR/REL)
+dir_typebuf_len  = $c826
+dir_entry_color  = $c827
+dir_name_has_dot = $c828   ; nonzero if the name already contains a "."
+                            ; (e.g. "DRYER420PCT.BIN") - such names skip
+                            ; the auto-appended ".TYPE" suffix, since
+                            ; they already carry their own extension
