@@ -244,7 +244,7 @@ help_text2
         !byte   HELP_CYAN
         !text   "DISK     "
         !byte   HELP_WHITE
-        !text   "DIR DEVICE CD DELETE RENAME"
+        !text   "DIR DEVICE CD DELETE/DEL RENAME"
         !byte   13
         !text   "          DLOAD DSAVE"
         !byte   13,13

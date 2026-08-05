@@ -8,16 +8,18 @@
 ; them correctly) was captured directly from a real load in VICE, not
 ; recalled from memory.
 ;
-; DELETE/RENAME/CD are scoped to quoted filename literals only (not a
-; general string expression via FRMEVL) - real filenames are what every
-; one of these commands actually needs in practice, and this avoids
-; depending on BASIC's string-descriptor/FRMEVL-return internals, which
-; have never been verified in this project (unlike the numeric BAS_
-; FRMNUM/BAS_GETADR path, already proven by BANK/DEVICE). DELETE/
-; RENAME/CD also don't read back the disk drive's error-channel
-; response - a real failure (e.g. file not found) fails silently for
-; now; reading channel 15's response back is a reasonable later
-; refinement, not attempted here.
+; DELETE/RENAME/CD are scoped to filename literals only (not a general
+; string expression via FRMEVL) - real filenames are what every one of
+; these commands actually needs in practice, and this avoids depending
+; on BASIC's string-descriptor/FRMEVL-return internals, which have
+; never been verified in this project (unlike the numeric BAS_FRMNUM/
+; BAS_GETADR path, already proven by BANK/DEVICE). DELETE (and its DEL
+; alias) and DSAVE/DLOAD accept an unquoted name too, via
+; parse_filename_opt - RENAME/CD still require quotes (parse_filename),
+; unchanged since that was never asked for. DELETE/RENAME/CD also don't
+; read back the disk drive's error-channel response - a real failure
+; (e.g. file not found) fails silently for now; reading channel 15's
+; response back is a reasonable later refinement, not attempted here.
 
 BAS_FRMNUM  = $ad8a      ; evaluate + require a numeric expression
 BAS_GETADR  = $b7f7      ; convert FAC1 to a 16-bit int in $14/$15
@@ -697,6 +699,70 @@ pf2_close
         jsr     BAS_CHRGET
         rts
 
+; --- Same job as parse_filename, but for DLOAD/DSAVE/DELETE only: also
+; accepts a bare, unquoted name (e.g. "DLOAD HI" as well as
+; "DLOAD "HI""). Kept separate from parse_filename itself rather than
+; made a shared option - a prior attempt to give DELETE/RENAME/CD the
+; same unquoted path was explicitly rolled back; DELETE earned its way
+; back in on its own later ask, RENAME/CD stay quote-only since that
+; was never asked for. The quoted branch is byte-for-byte
+; parse_filename's own logic (same stack-orphan fix on both error
+; exits, same reasoning as its comment above). The bare branch stores
+; the char BAS_CHRGOT already peeked at entry as the first byte, then
+; walks BAS_CHRGET until end-of-statement (0) or a ":" - leaving
+; BAS_TXTPTR sitting ON that terminator, same as how the quoted branch
+; leaves it right after the closing quote: either way the caller's own
+; next CHRGOT/CHRGET sees the correct next token. Embedded spaces get
+; silently dropped by CHRGET/CHRGOT's own space-skip behavior (see
+; resident.asm's OkExt comment) - harmless here since real CBM DOS
+; names don't contain spaces in practice.
+parse_filename_opt
+        jsr     BAS_CHRGOT
+        cmp     #CHR_QUOTE
+        beq     dpf_quoted
+        ldy     #0
+dpf_bare_check
+        cmp     #0
+        beq     dpf_bare_done
+        cmp     #':'
+        beq     dpf_bare_done
+        cpy     #FILENAME_MAXLEN
+        bcc     dpf_bare_store
+        pla
+        pla
+        jmp     disk_name_too_long
+dpf_bare_store
+        sta     filename_buf,y
+        iny
+        jsr     BAS_CHRGET
+        jmp     dpf_bare_check
+dpf_bare_done
+        rts
+dpf_quoted
+        ldy     #0
+dpf_loop
+        jsr     BAS_CHRGET
+        cmp     #CHR_QUOTE
+        beq     dpf_close
+        cmp     #0
+        bne     dpf_not_end
+        pla
+        pla
+        jmp     disk_missing_quote
+dpf_not_end
+        cpy     #FILENAME_MAXLEN
+        bcc     dpf_store
+        pla
+        pla
+        jmp     disk_name_too_long
+dpf_store
+        sta     filename_buf,y
+        iny
+        jmp     dpf_loop
+dpf_close
+        jsr     BAS_CHRGET
+        rts
+
 disk_missing_quote
         ldx     #0
 dmq_loop
@@ -768,7 +834,7 @@ send_command_err
 
 ; --- DELETE "name": disk drive SCRATCH command ("S0:name"). ---
 DeleteCmd
-        jsr     parse_filename
+        jsr     parse_filename_opt
         sty     disk_namelen
         ldx     #0
         lda     #'S'
@@ -874,7 +940,7 @@ rmc_msg
 ; fixes that up, real BASIC ROM code exercising the exact same path a
 ; real LOAD would. ---
 DloadCmd
-        jsr     parse_filename
+        jsr     parse_filename_opt
         sty     disk_namelen
         lda     disk_namelen
         ldx     #<filename_buf
@@ -940,7 +1006,7 @@ dload_err_msg
 ; ($00,X) from whatever zero-page address A holds, i.e. #$2b here reads
 ; TXTTAB itself as the start address. ---
 DsaveCmd
-        jsr     parse_filename
+        jsr     parse_filename_opt
         sty     disk_namelen
         lda     disk_namelen
         ldx     #<filename_buf

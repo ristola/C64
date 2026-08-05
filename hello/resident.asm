@@ -483,7 +483,8 @@ ExtBankTab
         !byte   6, 6, 6                 ; CARTINFO BANKS BANK
         !byte   8, 8, 8, 8, 8           ; SOUND VOLUME WAVE ADSR FILTER
         !byte   9, 9, 9                 ; FLASHERASE FLASHLOAD FLASHVERIFY
-        !byte   10, 10, 10, 10, 10, 10, 10 ; DIR DEVICE CD DELETE RENAME DLOAD DSAVE
+        !byte   10, 10, 10, 10, 10, 10, 10, 10 ; DIR DEVICE CD DELETE DEL
+                                                  ; RENAME DLOAD DSAVE
         !byte   11, 11                  ; HTTPGET TELNET
         !byte   0                       ; JET - replays the boot flyby;
                                           ; bank 0, same bank menu_open
@@ -503,6 +504,7 @@ ExtSlotLoTab
         !byte   <SLOT_SOUND, <SLOT_VOLUME, <SLOT_WAVE, <SLOT_ADSR, <SLOT_FILTER
         !byte   <SLOT_FLASHERASE, <SLOT_FLASHLOAD, <SLOT_FLASHVERIFY
         !byte   <SLOT_DIR, <SLOT_DEVICE, <SLOT_CD, <SLOT_DELETE
+        !byte   <SLOT_DELETE                    ; DEL - same slot as DELETE
         !byte   <SLOT_RENAME, <SLOT_DLOAD, <SLOT_DSAVE
         !byte   <SLOT_HTTPGET, <SLOT_TELNET
         !byte   <SLOT_JET
@@ -1838,6 +1840,13 @@ ExtTab
         !byte   'D'+$80
         !text   "DELET"
         !byte   'E'+$80
+        !text   "DE"
+        !byte   'L'+$80         ; DEL - shorthand for DELETE, same slot;
+                                  ; must come after DELETE above (longer
+                                  ; name first) or typing DELETE would
+                                  ; match DEL's 3 chars and leave "ETE"
+                                  ; dangling - see this table's own
+                                  ; ordering comment
         !text   "RENAM"
         !byte   'E'+$80
         !text   "DLOA"
