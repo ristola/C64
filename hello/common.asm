@@ -131,8 +131,8 @@ menu_dispatch_num
         bne     +
         jmp     menu_open    ; nothing typed - just redraw
 +
-        cmp     #13
-        bcs     menu_open    ; >12 - invalid, redraw
+        cmp     #14
+        bcs     menu_open    ; >13 - invalid, redraw
 
         cmp     #1
         bne     nd1
@@ -162,8 +162,12 @@ nd7     cmp     #8
         bne     nd8
         jsr     feat_memory_viewer
         jmp     menu_open
-nd8
-        jsr     show_stub    ; A = 1-12, looks up the name itself
+nd8     cmp     #13
+        bne     nd13
+        jsr     menu_fastload_open
+        jmp     menu_open
+nd13
+        jsr     show_stub    ; A = 1-13, looks up the name itself
         jmp     menu_open
 
 ; --- CARTRIDGE LAB submenu (item 1) - EPROM/flash chip tools. All six
@@ -334,6 +338,91 @@ menu_lab_data
         !text   "SELECT: "
         !byte   $00
 
+; --- FASTLOAD SETTINGS (item 13) - shows/toggles fastload_enabled
+; (slots.asm), which DloadCmd (bank10_content.asm) checks before
+; deciding whether to bank_call into FastDload (bank 13, real, working)
+; or fall back to plain KERNAL_LOAD. No BASIC command for this
+; deliberately - an earlier BASIC-command-plus-boot-banner version was
+; built and backed out (see git history) after turning out to be
+; genuinely hard to verify was even displaying; this F1-menu-only
+; version is simpler to reason about and test. $1E/$1C are CHROUT's own
+; green/red control codes, same convention DIR uses (bank10_content.asm).
+menu_fastload_open
+        lda     #$93
+        jsr     $ffd2
+        lda     #$9f            ; cyan
+        jsr     $ffd2
+        ldx     #0
+mfl_title_loop
+        lda     mfl_title,x
+        beq     mfl_title_done
+        jsr     $ffd2
+        inx
+        bne     mfl_title_loop
+mfl_title_done
+        lda     fastload_enabled
+        beq     mfl_show_off
+        lda     #$1e            ; green
+        jsr     $ffd2
+        ldx     #0
+mfl_on_loop
+        lda     mfl_on_msg,x
+        beq     mfl_prompt
+        jsr     $ffd2
+        inx
+        bne     mfl_on_loop
+mfl_show_off
+        lda     #$1c            ; red
+        jsr     $ffd2
+        ldx     #0
+mfl_off_loop
+        lda     mfl_off_msg,x
+        beq     mfl_prompt
+        jsr     $ffd2
+        inx
+        bne     mfl_off_loop
+mfl_prompt
+        lda     #$05            ; white
+        jsr     $ffd2
+        ldx     #0
+mfl_prompt_loop
+        lda     mfl_prompt_msg,x
+        beq     mfl_wait
+        jsr     $ffd2
+        inx
+        bne     mfl_prompt_loop
+mfl_wait
+        jsr     $ffe4
+        beq     mfl_wait
+        cmp     #'1'
+        bne     +
+        lda     #1
+        sta     fastload_enabled
+        jmp     menu_fastload_open    ; redraw with the new status
++       cmp     #'0'
+        bne     +
+        lda     #0
+        sta     fastload_enabled
+        jmp     menu_fastload_open
++       rts                            ; any other key - back to main menu
+
+mfl_title
+        !text   "FASTLOAD SETTINGS"
+        !byte   $0d,$0d,0
+mfl_on_msg
+        !text   "STATUS: ENABLED"
+        !byte   $0d,$0d,0
+mfl_off_msg
+        !text   "STATUS: DISABLED"
+        !byte   $0d,$0d,0
+mfl_prompt_msg
+        !text   "PRESS 1 TO ENABLE"
+        !byte   $0d
+        !text   "PRESS 0 TO DISABLE"
+        !byte   $0d
+        !text   "ANY OTHER KEY TO RETURN"
+        !byte   $0d,0
+
 menu_help
         lda     #<name_help
         sta     str_ptr
@@ -490,6 +579,8 @@ menu_data
         !text   "11. BASIC WORKSPACE"
         !byte   $0d
         !text   "12. HARDWARE DIAGNOSTICS"
+        !byte   $0d
+        !text   "13. FASTLOAD SETTINGS"
         !byte   $0d,$0d
         !byte   $9f                                        ; cyan
         !text   "F1 = HELP"

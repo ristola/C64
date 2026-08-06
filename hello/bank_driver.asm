@@ -1,5 +1,5 @@
 ; Shared top-level file for every bank's ROML ($8000-$9FFF) build - built
-; once per bank (13 banks total: 0-12; see build_cart.sh), with
+; once per bank (20 banks total: 0-19; see build_cart.sh), with
 ; -DBANKNUM=n selecting which bank's content gets included. Content
 ; occupies $8000-$97BF; the resident kernel (resident.asm, identical in
 ; every bank) always sits at the fixed $97C0-$9FFF range (2112 bytes -
@@ -12,7 +12,10 @@
 ;
 ; Bank 12 has no content yet (reserved for the later SERIAL plan) and
 ; falls straight through to the padding below with nothing sourced - an
-; all-$FF ROML, matching real erased-flash state.
+; all-$FF ROML, matching real erased-flash state. Banks 14-19 are the
+; same, deliberately: genuinely empty, user-programmable space - see
+; slots.asm's FIRST_USER_BANK comment for the protected/user-bank
+; policy this boundary is part of.
 
 *=$8000
 
@@ -55,6 +58,10 @@
         !source "bank11_content.asm"
 }
 ; Bank 12 reserved for the later SERIAL plan - intentionally no content yet.
+!if BANKNUM = 13 {
+        !source "bank13_content.asm"
+}
+; Banks 14-19: user-programmable range, intentionally no content.
 
 !if * > $97c0 {
         !error "bank content overflowed into the resident kernel region ($97c0)"

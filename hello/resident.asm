@@ -97,6 +97,9 @@ EXTFUNCTOK = $cf
 ; there was never anything for this to usefully save in the first place.
 bank_call
         sta     bank_tmp
+        inc     bank_call_depth ; see slots.asm's own comment on this -
+                                 ; irq_hook checks it (not cur_bank) before
+                                 ; running the jet animation/F1 menu tick
         lda     cur_bank
         sta     resting_bank    ; stash a readable copy of the bank BASIC
                                  ; was actually resting on before this call
@@ -116,6 +119,7 @@ bank_call
 ; Ordinary "JSR bank_call ... RTS" return - pops the old bank pushed
 ; above, restores it, and RTS resumes whoever JSR'd bank_call.
 bank_return
+        dec     bank_call_depth
         pla
         sta     bank_tmp
         sta     cur_bank
@@ -132,6 +136,7 @@ bank_return
 ; a jiffy IRQ could land in). Re-enable here, once we're safely back on
 ; bank 0, before resuming BASIC (which needs its jiffy IRQ running).
 bank_return_basic
+        dec     bank_call_depth
         pla
         sta     bank_tmp
         sta     cur_bank
@@ -160,6 +165,7 @@ bank_return_basic
 ; region regardless of which bank just became active - same reasoning
 ; bank_call/bank_return_basic already rely on.
 bank_commit
+        dec     bank_call_depth
         sta     cur_bank
         sta     bank_tmp
         jsr     ram_bank_switch
@@ -775,25 +781,30 @@ irq_hook
         sta     $d020
         sta     $d021
 
-; If some OTHER BASIC+ command is already mid-dispatch (cur_bank != 0),
-; skip the animation/F1 checks below entirely rather than risk a nested
-; bank_call landing while a real KERNAL disk operation (DIR/DLOAD's own
-; KERNAL_LOAD) is in progress. Confirmed live in VICE: DIR jammed with
-; a garbage value about to be written to EASYFLASH_BANK (A=$D0, caught
-; via a $DE00 store watchpoint) - real KERNAL disk I/O over the serial
-; bus needs the jiffy clock to work at all, so KERNAL_LOAD very likely
-; re-enables interrupts internally even though our own SEI is nominally
-; held for the whole dispatch; a jiffy tick landing in that window let
-; this nested bank_call (tower_anim/F1, both bank-0-only activities)
-; run while bank 10 was already active for DIR. bank_call's own stack-
-; based design is meant to make nesting safe, and normally does - this
-; guard doesn't depend on fully proving the exact failure mode, it just
-; makes the enabling condition (a nested bank_call while some OTHER
-; bank is already active) structurally impossible: neither the boot
-; animation nor the F1 menu need to run anywhere except while resting
-; at bank 0, so skipping them here costs nothing but a tick or two of
-; delay, picked back up the next time this fires back at bank 0.
-        lda     cur_bank
+; If some OTHER BASIC+ command is already mid-dispatch (bank_call_depth
+; != 0), skip the animation/F1 checks below entirely rather than risk a
+; nested bank_call landing while a real KERNAL disk operation (DIR/
+; DLOAD's own KERNAL_LOAD) is in progress. Confirmed live in VICE: DIR
+; jammed with a garbage value about to be written to EASYFLASH_BANK
+; (A=$D0, caught via a $DE00 store watchpoint) - real KERNAL disk I/O
+; over the serial bus needs the jiffy clock to work at all, so
+; KERNAL_LOAD very likely re-enables interrupts internally even though
+; our own SEI is nominally held for the whole dispatch; a jiffy tick
+; landing in that window let this nested bank_call (tower_anim/F1, both
+; bank-0-only activities) run while bank 10 was already active for DIR.
+; bank_call's own stack-based design is meant to make nesting safe, and
+; normally does - this guard doesn't depend on fully proving the exact
+; failure mode, it just makes the enabling condition (a nested bank_call
+; while some OTHER call is already active) structurally impossible.
+; Originally checked cur_bank != 0 instead of bank_call_depth - wrong:
+; cur_bank also changes permanently for BANK <n> (bank_commit, above),
+; which isn't "mid-dispatch" at all, just BASIC's own new resting state
+; - that made the jet animation (and F1 menu) freeze forever the moment
+; anyone typed BANK 2, with nothing unsafe actually in progress.
+; bank_call_depth tracks the real hazard precisely: nonzero only while a
+; bank_call is genuinely still unwinding, regardless of which bank ends
+; up resting once it's done - see slots.asm's own comment on it.
+        lda     bank_call_depth
         beq     irq_bank_idle
         jmp     irq_chain
 irq_bank_idle

@@ -114,7 +114,14 @@ SLOT_TOWER_ANIM_START = SLOT_BASE + 54*SLOT_SIZE
 SLOT_JET              = SLOT_BASE + 55*SLOT_SIZE
 SLOT_REBOOT           = SLOT_BASE + 56*SLOT_SIZE  ; bank 0
 SLOT_RENUM            = SLOT_BASE + 57*SLOT_SIZE  ; bank 1
-; slots 58-59 reserved for future banks/commands
+
+; --- FastLoader (bank 13) - FastDload's own callable entry point, not
+; a BASIC keyword itself: DloadCmd (bank 10) bank_calls into this slot
+; instead of running KERNAL_LOAD directly. See bank13_content.asm's own
+; header comment for why (skips KERNAL_LOAD's per-call overhead, same
+; technique DirCmd already proved out for "$" listings). ---
+SLOT_FASTDLOAD        = SLOT_BASE + 58*SLOT_SIZE  ; bank 13
+; slot 59 reserved for future banks/commands
 ;
 ; install_basic_ext itself does NOT get a slot - unlike menu_open (real
 ; per-bank content in Bank 0) or ClsCmd/HexCmd (real per-bank content in
@@ -140,6 +147,44 @@ resting_bank         = $037c   ; the bank BASIC was actually resting on
                                 ; cur_bank itself becomes the TARGET bank
                                 ; for the duration of the call, so this is
                                 ; what CARTINFO/BANKS actually want to read
+fastload_enabled     = $037e   ; nonzero = DLOAD uses FastDload (bank 13);
+                                ; zero = falls back to plain KERNAL_LOAD.
+                                ; Set via the F1 Cart Menu's FastLoad
+                                ; settings item (common.asm) - no BASIC
+                                ; command for this, deliberately (an
+                                ; earlier BASIC-command + boot-banner
+                                ; version was built and then backed out;
+                                ; see git history around this comment).
+                                ; RAM only - survives a warm reset (NEW,
+                                ; RUN/STOP+RESTORE) but NOT a real power
+                                ; cycle or REBOOT, which both reinitialize
+                                ; it back to enabled (cart_start) - true
+                                ; persistence would need real flash-write
+                                ; code, which doesn't exist anywhere in
+                                ; this project yet and wasn't worth the
+                                ; risk of a first-ever attempt just for
+                                ; this toggle.
+bank_call_depth      = $037d   ; how many bank_call visits are currently
+                                ; nested (0 = none in progress) - separate
+                                ; from cur_bank, which tracks WHICH bank is
+                                ; resting/active, not WHETHER a dispatch is
+                                ; mid-flight. irq_hook checks this (not
+                                ; cur_bank) before running the jet
+                                ; animation/F1 menu tick: cur_bank alone
+                                ; used to double as "is anything unsafe to
+                                ; interrupt happening", which meant BANK <n>
+                                ; permanently resting somewhere other than 0
+                                ; silently froze the animation forever, even
+                                ; with nothing actually in progress. The
+                                ; real hazard (confirmed live: a jiffy tick
+                                ; landing while a nested bank_call was
+                                ; genuinely active mid-KERNAL-disk-I/O
+                                ; jammed EASYFLASH_BANK) only exists while a
+                                ; call is truly in flight, which this
+                                ; counts precisely - incremented in
+                                ; bank_call, decremented in bank_return/
+                                ; bank_return_basic/bank_commit (all four
+                                ; below).
 
 ; Tiny trampoline (7 bytes: LDA bank_tmp / STA $DE00 / RTS), copied into
 ; RAM once at boot (cart_start). The actual $DE00 write MUST execute
@@ -310,12 +355,25 @@ EASYFLASH_BANK    = $de00
 EASYFLASH_CONTROL = $de02
 EASYFLASH_8K_MODE = $06         ; MEMCTRL|EXROM - BASIC ROM stays visible
 
-; Total number of banks actually built (0-12, see build_cart.sh's loop) -
+; Total number of banks actually built (0-19, see build_cart.sh's loop) -
 ; every one gets the full resident kernel regardless of whether it has
 ; real content yet (bank_driver.asm sources resident.asm unconditionally),
 ; so any of these is safe to switch to; anything >= this isn't - update
-; here when adding a 14th bank.
-TOTAL_BANKS = 13
+; here when adding another bank.
+TOTAL_BANKS = 20
+
+; First bank in the genuinely user-programmable range (games, utilities,
+; ROM images, custom software - anything a user flashes themselves).
+; Banks below this are the protected "system" range (boot/menu, all
+; BASIC+ extension categories, the FastLoader, and - eventually - real
+; flash-programming logic in bank 9, still stubbed for now): boot ROM
+; (0), BASIC extensions (1-11), reserved for the later SERIAL plan (12),
+; FastLoader (13). This is a software-level convention only - EasyFlash's
+; flash chip has no wired-up hardware write-protect pin - so it only
+; means anything once real flash-write code exists (the still-stubbed
+; CARTRIDGE LAB submenu, common.asm) and actually checks against it
+; before writing; nothing enforces it yet.
+FIRST_USER_BANK = 14
 
 ; --- zero-page save/restore span (unchanged from the single-bank
 ; design - common.asm/ultimate_sdk.asm/features.asm/bitmap.asm's
@@ -356,3 +414,11 @@ dir_name_has_dot = $c828   ; nonzero if the name already contains a "."
                             ; (e.g. "DRYER420PCT.BIN") - such names skip
                             ; the auto-appended ".TYPE" suffix, since
                             ; they already carry their own extension
+
+; FastDload's (bank 13) own success/failure report back to DloadCmd
+; (bank 10) - not the carry flag, since bank_return's own PLA/STA
+; sequence (resident.asm) doesn't guarantee carry survives back to the
+; caller. 0 = ok, 1 = OPEN failed, 2 = CHKIN failed. Same "only one
+; disk command ever runs at a time" reasoning as dir_namebuf etc. above
+; makes this reuse-safe.
+fastload_error   = $c829

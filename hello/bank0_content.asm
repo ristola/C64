@@ -121,8 +121,17 @@ cart_start
         sta     f1_state
         sta     cur_bank    ; hardware always resets with bank 0 selected -
                              ; keep the RAM shadow in sync from the start
+        sta     bank_call_depth  ; RAM's power-on value is undefined - a
+                                   ; stale nonzero byte here would freeze
+                                   ; the jet animation/F1 menu forever,
+                                   ; the exact symptom this counter itself
+                                   ; was added to fix
         sta     jet_charset_ready  ; jet_charset_setup below sets this
                                      ; itself once the copy below completes
+        lda     #1
+        sta     fastload_enabled  ; FASTLOAD defaults to ON every power
+                                    ; cycle/REBOOT - see slots.asm's own
+                                    ; comment on why this doesn't persist
         lda     #8
         sta     disk_device ; DISK category's default device number
 

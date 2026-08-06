@@ -939,9 +939,33 @@ rmc_msg
 ; pointer copies RENUM's finalize step already does (bank1_content.asm)
 ; fixes that up, real BASIC ROM code exercising the exact same path a
 ; real LOAD would. ---
+; Byte transfer is bank_call'd out to bank 13's FastDload when
+; fastload_enabled (slots.asm) is set - skips KERNAL_LOAD's own
+; overhead, see that bank's own header comment - falling back to the
+; original plain KERNAL_LOAD call otherwise (FASTLOAD OFF, bank13_
+; content.asm). disk_namelen/filename_buf are set here either way;
+; FastDload's own X/Y calling convention matches KERNAL_LOAD's
+; (destination address) on purpose, so both paths converge cleanly.
 DloadCmd
         jsr     parse_filename_opt
         sty     disk_namelen
+        lda     fastload_enabled
+        beq     dload_kernal_path
+        lda     #<SLOT_FASTDLOAD
+        sta     call_ptr
+        lda     #>SLOT_FASTDLOAD
+        sta     call_ptr+1
+        ldx     $2b             ; TXTTAB low
+        ldy     $2c             ; TXTTAB high - destination address,
+                                  ; passed through bank_call untouched
+        lda     #13             ; FastLoader bank
+        jsr     bank_call
+        lda     fastload_error
+        beq     dload_ok
+        jmp     dload_error     ; A still holds fastload_error's code -
+                                  ; same "pha, print, print_decimal_word"
+                                  ; tail this already expected
+dload_kernal_path
         lda     disk_namelen
         ldx     #<filename_buf
         ldy     #>filename_buf
@@ -954,7 +978,9 @@ DloadCmd
         ldx     $2b             ; TXTTAB low
         ldy     $2c             ; TXTTAB high
         jsr     KERNAL_LOAD
-        bcs     dload_error
+        bcc     dload_ok
+        jmp     dload_error
+dload_ok
         jsr     BAS_LINKPRG
         clc                     ; VARTAB = end of program: LINKPRG leaves
         lda     $22             ; $22/$23 pointing AT the final 0000
