@@ -814,6 +814,29 @@ irq_bank_idle
         dec     basic_ext_countdown
         bne     irq_ext_checked
         jsr     install_basic_ext
+        jsr     reinstall_hooks ; close the window where RESTORE, pressed
+                                  ; before the user has typed anything at
+                                  ; all, locks up: BASIC's own cold start
+                                  ; (which just ran) silently resets
+                                  ; $0314/$0315/$0318/$0319 back to stock
+                                  ; as part of its own normal completion
+                                  ; (same RESTOR call reinstall_hooks'
+                                  ; own comment already documents for
+                                  ; every statement completion) - normally
+                                  ; reinstall_hooks only re-arms these on
+                                  ; the NEXT typed line (ConvertToTokens),
+                                  ; but that's too late if RESTORE (a real
+                                  ; NMI, hits $FE44's "JMP ($0318)" the
+                                  ; instant it fires) gets pressed first:
+                                  ; confirmed live, both in VICE and on
+                                  ; real Ultimate hardware, where it's a
+                                  ; full lockup, not just VICE's milder
+                                  ; blue-screen-and-recover. Calling it
+                                  ; here, once, right after BASIC's cold
+                                  ; start has settled - same moment
+                                  ; tower_anim_start below already fires -
+                                  ; closes that window before any keypress
+                                  ; can matter.
         ; Kick off the boot splash jet flyby now that BASIC's cold
         ; start (which just ran, back in bank0_content.asm) has
         ; settled. tower_anim_start now lives in bank0_content.asm,
@@ -949,7 +972,31 @@ read_f1
 ; entirely (see that hookup's own comment for why), so it has to be
 ; reachable no matter which bank happens to be switched in when NMI
 ; fires - the same reasoning irq_hook itself already follows.
+;
+; Also has to acknowledge CIA2's own interrupt-control register ($DD0D)
+; before RTI, same as real $FE47 does ("LDA #$7F / STA $DD0D / LDY
+; $DD0D") right after its own PHA/TXA-PHA/TYA-PHA - a first version of
+; this routine skipped that, reasoning "we have nothing to do, so just
+; unwind and return." Wrong: CIA interrupt flags are latched in
+; hardware - they stay set until the CPU explicitly reads $DD0D, not
+; just because the NMI condition itself has passed. Skipping that read
+; means the SAME unacknowledged flag is still sitting there the instant
+; RTI restores the interrupt-enabled state, so NMI can re-fire
+; immediately - a real 6526 CIA hardware behavior, not a guess. This
+; reads as a silent, invisible, non-maskable retrigger loop: irq_hook's
+; own unconditional per-tick color re-black (resident.asm, further
+; below) never gets a real chance to run between bounces, which is
+; exactly why the border/background were confirmed live (both in VICE
+; and on real Ultimate hardware) getting stuck at the real KERNAL's
+; stock light-blue/blue instead of our own black - not a vector-timing
+; bug (already fixed separately, see irq_hook's own "jsr
+; reinstall_hooks" comment), a genuinely different, second bug.
 nmi_safe
+        lda     #$7f
+        sta     $dd0d
+        lda     $dd0d           ; the read is what actually clears the
+                                  ; latched flag bits - the value itself
+                                  ; is never needed again
         pla
         tay
         pla
