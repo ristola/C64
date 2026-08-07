@@ -7,17 +7,32 @@
 ; variable addresses) has to be a shared compile-time constant here,
 ; not a real address resolved from some other bank's code.
 
-; --- Fixed-slot jump table: $8010-$80FF, 60 slots x 4 bytes. Every
-; bank reserves this same range at the same addresses; a bank only
-; fills in the slots it actually implements, each with a plain
-; "JMP <real address>" (3 bytes + 1 pad). resident.asm's dispatch
-; tables store (bank, slot) pairs using these constants - never a raw
-; label - since that's the only address that's guaranteed valid before
-; the slot's own bank is even switched in. ---
+; --- Fixed-slot jump table: $8010 up to BANK_CONTENT_START (below),
+; SLOT_COUNT slots x 4 bytes. Every bank reserves this same range at
+; the same addresses; a bank only fills in the slots it actually
+; implements, each with a plain "JMP <real address>" (3 bytes + 1 pad).
+; resident.asm's dispatch tables store (bank, slot) pairs using these
+; constants - never a raw label - since that's the only address that's
+; guaranteed valid before the slot's own bank is even switched in. ---
 SLOT_BASE = $8010
 SLOT_SIZE = 4
+SLOT_COUNT = 61              ; bumped from 60 when Bank 15's
+                               ; SLOT_FEAT_DISPATCH needed a 61st slot
+                               ; (see that constant's own comment) -
+                               ; every bank content file's own
+                               ; "!fill BANK_CONTENT_START-*, $ff" /
+                               ; "*=BANK_CONTENT_START" pair picks this
+                               ; up automatically, so bumping this one
+                               ; constant is the whole change needed
+                               ; next time a slot is added.
+BANK_CONTENT_START = SLOT_BASE + SLOT_COUNT*SLOT_SIZE
 
-SLOT_MENU_OPEN        = SLOT_BASE + 0*SLOT_SIZE  ; bank 0
+SLOT_MENU_OPEN        = SLOT_BASE + 0*SLOT_SIZE  ; bank 14 - see that
+                                                    ; bank's own comment
+                                                    ; below; irq_hook
+                                                    ; (resident.asm)
+                                                    ; bank_calls here
+                                                    ; with A=14, not 0
 SLOT_CLS              = SLOT_BASE + 1*SLOT_SIZE  ; bank 1
 
 ; --- SCREEN + HELP (bank 1) ---
@@ -92,17 +107,19 @@ SLOT_DSAVE            = SLOT_BASE + 51*SLOT_SIZE
 SLOT_HTTPGET          = SLOT_BASE + 52*SLOT_SIZE
 SLOT_TELNET           = SLOT_BASE + 53*SLOT_SIZE
 
-; --- Boot splash one-time setup (bank 0) - tower_anim_start/
-; jet_charset_setup/jet_bold_font/jet_sprite live in
-; bank0_content.asm now, not resident.asm: resident.asm has a hard
-; ~2KB budget ($97C0-$9FFF) shared by every bank, and this is ~350
-; bytes of
-; code+data that only ever runs once, at the exact moment cur_bank is
-; still guaranteed 0 (right after cold boot, before any BASIC extension
-; command could plausibly have run yet) - safe to reach via a one-time
-; bank_call from irq_hook instead of staying resident. jet_anim_tick
-; itself (called every subsequent tick, when cur_bank could be
-; anything) still has to stay resident - only the setup moved. ---
+; --- Boot splash one-time setup (bank 0) - tower_anim_start/jet_sprite
+; live in bank0_content.asm now, not resident.asm: resident.asm has a
+; hard ~2KB budget ($97C0-$9FFF) shared by every bank, and this is
+; enough code+data that only ever runs once, at the exact moment
+; cur_bank is still guaranteed 0 (right after cold boot, before any
+; BASIC extension command could plausibly have run yet), to be worth
+; reaching via a one-time bank_call from irq_hook instead of staying
+; resident. jet_anim_tick itself (called every subsequent tick, when
+; cur_bank could be anything) still has to stay resident - only the
+; setup moved. jet_charset_setup/jet_bold_font moved again since, out
+; to bank 14 (see SLOT_JET_CHARSET_SETUP below) - tower_anim_start's
+; own jet_setup now reaches jet_charset_setup via a nested bank_call
+; instead of a plain JSR. ---
 SLOT_TOWER_ANIM_START = SLOT_BASE + 54*SLOT_SIZE
 
 ; JET - replays the boot splash flyby on demand. Bank 0, same as
@@ -121,11 +138,70 @@ SLOT_RENUM            = SLOT_BASE + 57*SLOT_SIZE  ; bank 1
 ; header comment for why (skips KERNAL_LOAD's per-call overhead, same
 ; technique DirCmd already proved out for "$" listings). ---
 SLOT_FASTDLOAD        = SLOT_BASE + 58*SLOT_SIZE  ; bank 13
-; slot 59 reserved for future banks/commands
+
+; --- Cart Menu (bank 14) - originally just a home for the 2x-size
+; title's 64 new character glyphs (512 bytes) once Bank 0 ran out of
+; ROML headroom to hold them alongside everything else already there
+; (common.asm/features.asm/bitmap.asm/spriteeditor.asm, plus the boot
+; splash). Grew from "font data only" to "the whole F1 Cart Menu" the
+; next time Bank 0 filled up again (adding the EXIT item + selection-
+; pointer cursor): rather than keep rescuing one oversized piece of
+; Bank 0 at a time into ad-hoc homes, common.asm (and everything it
+; !source's - features.asm/bitmap.asm/spriteeditor.asm) moved here as a
+; whole, leaving Bank 0 with just cart_start/the boot splash - see that
+; file's own header comment. jet_charset_setup/jet_bold_font/jet_
+; copyright_glyph moved here too, since menu_draw_title (common.asm)
+; is jet_charset_setup's other caller and having both copies of that
+; routine (one per caller's bank) would just be two things to keep in
+; sync instead of one.
+;
+; This slot is jet_charset_setup's entry point for its ONE cross-bank
+; caller - bank0_content.asm's jet_setup, reached via a nested bank_call
+; (irq_hook already bank_called into bank 0 for tower_anim_start/JetCmd
+; before jet_setup runs). menu_draw_title's own call is same-bank (both
+; live in bank 14 now) and doesn't go through this slot at all - see
+; jet_charset_setup_xbank's own comment (bank14_content.asm) for why
+; the routine needs both a slot-table trampoline AND a plain-RTS entry
+; point rather than just one or the other.
+;
+; Placed right after the FastLoader (still part of the protected
+; "system" range, see FIRST_USER_BANK below) rather than tacked onto
+; the end, so "bank >= FIRST_USER_BANK" stays a single, simple
+; boundary check for any future flash-write tool - the previously-empty
+; user-programmable banks shift up by one (14-19 -> 15-20) to make
+; room; they had no real content to preserve either way. ---
+SLOT_JET_CHARSET_SETUP = SLOT_BASE + 59*SLOT_SIZE  ; bank 14
+
+; --- Menu Features (bank 15) - feat_sid_demo/feat_sprite_editor/feat_
+; cia_monitor/feat_vic_viewer/feat_memory_viewer/feat_joystick_tester
+; (features.asm/spriteeditor.asm, plus bitmap.asm which features.asm's
+; own graphics demo calls into directly) split off from Bank 14 the
+; moment it turned out common.asm + all four of those files together
+; still didn't fit in one 8K bank even after Bank 0's jet_charset_setup
+; moved in too - see bank14_content.asm's own header for the numbers.
+; menu_dispatch_num/menu_diag_dispatch_num (common.asm) reach every
+; feature here through this ONE slot rather than getting a slot each:
+; num_val (already the shared "which item" variable both of those
+; dispatch loops use) doubles as the argument, set to one of the FEAT_*
+; constants below immediately before the bank_call, and feat_dispatch
+; (bank15_content.asm) reads it back out to route to the right feat_*
+; routine internally via a plain same-bank JSR. One slot now covers
+; however many feature routines Bank 15 ends up holding, current or
+; future, instead of needing a new slot (and touching every bank
+; content file's own BANK_CONTENT_START boundary again) every time
+; another one gets added.
+SLOT_FEAT_DISPATCH    = SLOT_BASE + 60*SLOT_SIZE  ; bank 15
+
+FEAT_SID              = 1
+FEAT_SPRITE_EDITOR    = 2
+FEAT_CIA              = 3
+FEAT_VIC              = 4
+FEAT_MEMORY           = 5
+FEAT_JOYSTICK         = 6
 ;
 ; install_basic_ext itself does NOT get a slot - unlike menu_open (real
-; per-bank content in Bank 0) or ClsCmd/HexCmd (real per-bank content in
-; Bank 1), install_basic_ext only pokes $0304-$0309 with addresses of
+; per-bank content in Bank 14) or ClsCmd/HexCmd (real per-bank content
+; in Bank 1), install_basic_ext only pokes $0304-$0309 with addresses of
 ; resident routines (ConvertToTokens etc.) that are identical in every
 ; bank - so it's resident code itself, called with a plain JSR from
 ; irq_hook like any other resident-to-resident call, no bank_call needed.
@@ -355,12 +431,12 @@ EASYFLASH_BANK    = $de00
 EASYFLASH_CONTROL = $de02
 EASYFLASH_8K_MODE = $06         ; MEMCTRL|EXROM - BASIC ROM stays visible
 
-; Total number of banks actually built (0-19, see build_cart.sh's loop) -
+; Total number of banks actually built (0-21, see build_cart.sh's loop) -
 ; every one gets the full resident kernel regardless of whether it has
 ; real content yet (bank_driver.asm sources resident.asm unconditionally),
 ; so any of these is safe to switch to; anything >= this isn't - update
 ; here when adding another bank.
-TOTAL_BANKS = 20
+TOTAL_BANKS = 22
 
 ; First bank in the genuinely user-programmable range (games, utilities,
 ; ROM images, custom software - anything a user flashes themselves).
@@ -368,12 +444,18 @@ TOTAL_BANKS = 20
 ; BASIC+ extension categories, the FastLoader, and - eventually - real
 ; flash-programming logic in bank 9, still stubbed for now): boot ROM
 ; (0), BASIC extensions (1-11), reserved for the later SERIAL plan (12),
-; FastLoader (13). This is a software-level convention only - EasyFlash's
-; flash chip has no wired-up hardware write-protect pin - so it only
-; means anything once real flash-write code exists (the still-stubbed
-; CARTRIDGE LAB submenu, common.asm) and actually checks against it
-; before writing; nothing enforces it yet.
-FIRST_USER_BANK = 14
+; FastLoader (13), F1 Cart Menu (14), Menu Features (15 - inserted right
+; after 14 rather than tacked onto the end, same reasoning as 14 itself
+; already followed: keeps "bank >= FIRST_USER_BANK" a single boundary
+; check instead of a non-contiguous protected range). The previously-
+; empty user-programmable banks shift up by one again (15-20 -> 16-21)
+; to make room - same as the last time this happened, they had no real
+; content to preserve. This is a software-level convention only -
+; EasyFlash's flash chip has no wired-up hardware write-protect pin -
+; so it only means anything once real flash-write code exists (the
+; still-stubbed CARTRIDGE LAB submenu, common.asm) and actually checks
+; against it before writing; nothing enforces it yet.
+FIRST_USER_BANK = 16
 
 ; --- zero-page save/restore span (unchanged from the single-bank
 ; design - common.asm/ultimate_sdk.asm/features.asm/bitmap.asm's

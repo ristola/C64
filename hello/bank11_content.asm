@@ -38,9 +38,9 @@ CHR_QUOTE   = $22
 
 ; Reserved slot-table range continues to $80FF regardless of how many
 ; slots this bank actually fills in.
-!fill $8100-*, $ff
+!fill BANK_CONTENT_START-*, $ff
 
-*=$8100
+*=BANK_CONTENT_START
 
 ; ultimate_sdk.asm's own equates (register/command-byte constants) cost
 ; no address space, but its actual code does - has to come after the

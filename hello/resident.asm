@@ -7,7 +7,7 @@
 ;   - the BASIC-extension dispatcher (wired to $0304-$0309) must be
 ;     reachable whenever BASIC tokenizes or executes a line, which can
 ;     happen at any time, same reasoning.
-; Bank-specific command bodies (menu_open in Bank 0, ClsCmd/HexCmd in
+; Bank-specific command bodies (menu_open in Bank 14, ClsCmd/HexCmd in
 ; Bank 1, and everything future banks add) are NOT here - they're
 ; reached through the fixed-slot jump table (slots.asm) via bank_call
 ; below, since this file is assembled separately per bank and can never
@@ -507,9 +507,9 @@ ExtBankTab
                                                   ; RENAME DLOAD DSAVE
         !byte   11, 11                  ; HTTPGET TELNET
         !byte   0                       ; JET - replays the boot flyby;
-                                          ; bank 0, same bank menu_open
-                                          ; lives in (see slots.asm's
-                                          ; SLOT_JET comment)
+                                          ; bank 0, same bank tower_anim_
+                                          ; start/jet_setup live in (see
+                                          ; slots.asm's SLOT_JET comment)
         !byte   0                       ; REBOOT - real hardware reset,
                                           ; bank 0 (trivial, no real bank
                                           ; dependency either way)
@@ -743,7 +743,7 @@ ExtFuncSlotLoTab
 ; GETIN afterward is just a belt-and-suspenders flush for anything else
 ; that snuck in.
 ;
-; Once clear, this CLIs and bank_calls into Bank 0's menu_open - blocks
+; Once clear, this CLIs and bank_calls into Bank 14's menu_open - blocks
 ; on GETIN, which only ever fills up because the jiffy IRQ keeps firing,
 ; so interrupts must stay enabled while it runs (this makes the handler
 ; reentrant: further jiffy IRQs nest on top of it via the fast path
@@ -905,7 +905,10 @@ irq_flush
         sta     call_ptr
         lda     #>SLOT_MENU_OPEN
         sta     call_ptr+1
-        lda     #0              ; Bank 0
+        lda     #14             ; Bank 14 - the F1 Cart Menu moved out
+                                  ; of Bank 0 once it ran out of room
+                                  ; there; see slots.asm's SLOT_MENU_OPEN
+                                  ; comment
         jsr     bank_call
         jsr     zp_restore
         jsr     restore_screen

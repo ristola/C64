@@ -28,9 +28,9 @@ BAS_GETADR = $b7f7       ; convert FAC1 to a 16-bit int in $14/$15
 
 ; Reserved slot-table range continues to $80FF regardless of how many
 ; slots this bank actually fills in.
-!fill $8100-*, $ff
+!fill BANK_CONTENT_START-*, $ff
 
-*=$8100
+*=BANK_CONTENT_START
 
 ; --- CARTINFO: name, current resting bank, total banks built. ---
 CartInfoCmd

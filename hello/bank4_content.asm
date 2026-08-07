@@ -21,9 +21,9 @@
 
 ; Reserved slot-table range continues to $80FF regardless of how many
 ; slots this bank actually fills in.
-!fill $8100-*, $ff
+!fill BANK_CONTENT_START-*, $ff
 
-*=$8100
+*=BANK_CONTENT_START
 
 JoyFunc
         lda     #$00

@@ -12,6 +12,73 @@ num_val = $03        ; accumulated numeric menu selection (1-12)
 str_ptr  = $04       ; 2 bytes ($04/$05): indirect pointer for stub names
 mul_tmp  = $06       ; scratch for num_val = num_val*10 + digit
 draw_ptr = $07       ; 2 bytes ($07/$08): indirect pointer for menu_data
+menu_cursor = $09    ; top-level menu's cursor position, 1-12 - only
+                      ; ever set explicitly at boot (bank0_content.asm's
+                      ; cart_start, once) and by menu_cursor_move
+                      ; below; irq_hook's zp_save/zp_restore (resident.
+                      ; asm) already brackets the whole $02-$38 range
+                      ; around every F1 visit, same as num_val etc., so
+                      ; whatever the cursor lands on during one visit is
+                      ; discarded and reverts to the boot-time value of 1
+                      ; the next time F1 is pressed - "defaults to item
+                      ; 1" for free, no extra reset code needed here.
+                      ; INC/DEC/LDA/STA/CPX below address it as the
+                      ; literal $09, not this name - ACME (confirmed by
+                      ; a throwaway isolated test) picks 3-byte absolute
+                      ; addressing instead of 2-byte zero-page for those
+                      ; specific opcodes when the operand is a symbol
+                      ; here, for reasons not worth chasing further; the
+                      ; literal reliably gets the compact form instead.
+lab_cursor  = $0a    ; CARTRIDGE LAB submenu's own cursor, 1-6 - same
+                      ; idea as menu_cursor, but explicitly reset to 1
+                      ; every time menu_lab_open runs (below) rather
+                      ; than relying on zp_save/zp_restore: a submenu
+                      ; gets entered/left many times within one F1
+                      ; visit (zp_save/zp_restore only brackets the
+                      ; whole visit, not each submenu trip), so it needs
+                      ; its own explicit "defaults to item 1" reset.
+diag_cursor = $0b    ; HARDWARE DIAGNOSTICS submenu's cursor, 1-2 - same
+                      ; as lab_cursor, reset in menu_diag_open.
+cur_menu    = $0c    ; which of the three cursors above is "live" right
+                      ; now: 0=top-level (menu_cursor), 1=CARTRIDGE LAB
+                      ; (lab_cursor), 2=HARDWARE DIAGNOSTICS (diag_
+                      ; cursor). menu_cursor_move/menu_highlight_update
+                      ; (below) both index menu_cursor,cur_menu (i.e.
+                      ; the literal $09,X - same oversized-addressing
+                      ; workaround as menu_cursor itself) and the
+                      ; per-menu tables alongside them to work generically
+                      ; across all three, rather than needing three
+                      ; near-identical copies of both routines. Set by
+                      ; menu_open/menu_lab_open/menu_diag_open, each
+                      ; right before their own draw/wait loop starts.
+mhu_cursor_val     = $0d  ; menu_highlight_update's own scratch: the
+                            ; current menu's cursor value, latched once
+                            ; per call so X is free to reuse as the
+                            ; per-row loop counter afterward
+mhu_item_count_p1  = $0e  ; ditto, latched item-count-plus-1 (the loop
+                            ; bound menu_highlight_update's row loop
+                            ; compares X against - see menu_item_
+                            ; counts_p1 below for why it's +1)
+
+; Per-menu tables, indexed by cur_menu (0=top,1=lab,2=diag) - menu_
+; cursor_move/menu_highlight_update both read these instead of having
+; the item count/starting row hardcoded per menu.
+menu_item_counts    !byte 12, 6, 2   ; for wraparound (menu_cursor_move)
+menu_item_counts_p1 !byte 13, 7, 3   ; for the row loop bound
+                                       ; (menu_highlight_update) - +1
+                                       ; because that loop's X starts at
+                                       ; 1 and stops the iteration AFTER
+                                       ; X reaches the real count, same
+                                       ; shape the original hardcoded
+                                       ; "cpx #13" (12 items) already
+                                       ; used
+; Color-RAM address of each menu's own item row 1 - $D800 + firstRow*40,
+; precomputed (menu_highlight_update needs no multiply this way): top-
+; level items start row 6 (menu_data's own row-budget comment), both
+; submenus start row 4 (menu_lab_data/menu_diag_data - shorter screens,
+; no 2x-size title eating into their own row budget).
+menu_color_base_lo !byte <($d800+6*40), <($d800+4*40), <($d800+4*40)
+menu_color_base_hi !byte >($d800+6*40), >($d800+4*40), >($d800+4*40)
 
 start
         lda     #$00        ; black border + background
@@ -61,6 +128,15 @@ mainloop
 ; shortcuts directly. Everything below routes to a labeled "not yet
 ; implemented" screen except F7, which really does reset the machine.
 menu_open
+        lda     #$00
+        sta     $0c          ; cur_menu (top-level=0) - literal, not the
+                               ; symbol; see menu_cursor's own comment
+                               ; for why. Set before menu_draw, which
+                               ; paints the highlight using whatever
+                               ; cur_menu currently is; also correctly
+                               ; resets it back to 0 every time a
+                               ; submenu returns
+                               ; here via "jmp menu_open"
         jsr     menu_draw
         lda     #$00
         sta     num_val
@@ -69,21 +145,10 @@ menu_wait
         beq     menu_wait
 
         cmp     #$03         ; RUN/STOP - back out of the menu entirely
-        bne     +
-!ifdef BANKNUM {
-        jmp     bank_return  ; cart build: menu_open is reached via
-                              ; irq_hook's bank_call, so it has to finish
-                              ; the same way - a bare RTS here would leave
-                              ; bank_call's saved-bank byte stranded on
-                              ; the stack, corrupting the next unrelated
-                              ; RTS that ran anywhere in the system
-} else {
-        rts                  ; PRG build: no bank switching exists here -
-                              ; returns straight to mainloop
-}
-+
-        cmp     #$0d         ; RETURN - dispatch the typed number
-        beq     menu_dispatch_num
+        beq     menu_exit
+        cmp     #$0d         ; RETURN - dispatch the typed number (or,
+        beq     menu_dispatch_num  ; if none was typed, the pointer's
+                                     ; current selection - see there)
         cmp     #$85         ; F1 = Help
         bne     +
         jmp     menu_help
@@ -99,6 +164,18 @@ menu_wait
         cmp     #$88         ; F7 = Reset
         bne     +
         jmp     menu_reset
++
+        cmp     #$11         ; CRSR DOWN
+        bne     +
+        ldy     #0
+        jsr     menu_cursor_move
+        jmp     menu_wait
++
+        cmp     #$91         ; CRSR UP
+        bne     +
+        ldy     #1
+        jsr     menu_cursor_move
+        jmp     menu_wait
 +
 
         cmp     #$30         ; digit '0'-'9' ?
@@ -123,52 +200,108 @@ menu_wait
         sta     num_val
         jmp     menu_wait
 
+; Shared by RUN/STOP (menu_wait above) and item 12, EXIT (menu_
+; dispatch_num below) - same "leave the menu" action either way.
+menu_exit
+        jsr     menu_charset_off  ; back to the stock character ROM
+                                    ; before returning to BASIC - see
+                                    ; that routine's own comment for why
+!ifdef BANKNUM {
+        jmp     bank_return  ; cart build: menu_open is reached via
+                              ; irq_hook's bank_call, so it has to finish
+                              ; the same way - a bare RTS here would leave
+                              ; bank_call's saved-bank byte stranded on
+                              ; the stack, corrupting the next unrelated
+                              ; RTS that ran anywhere in the system
+} else {
+        rts                  ; PRG build: no bank switching exists here -
+                              ; returns straight to mainloop
+}
+
 ; Items with a real implementation are dispatched here by number;
 ; everything else falls through to the generic "not implemented" stub.
 ; CMP doesn't touch A, so num_val stays in A across this whole chain.
 menu_dispatch_num
         lda     num_val
         bne     +
-        jmp     menu_open    ; nothing typed - just redraw
+        lda     $09          ; menu_cursor - nothing typed, RETURN alone
+                               ; activates whatever it's currently on
+        sta     num_val      ; feat_dispatch (bank 15) reads its
+                               ; selector back out of num_val, so this
+                               ; path has to leave it holding the
+                               ; effective selection too, same as if it
+                               ; had been typed
 +
-        cmp     #14
-        bcs     menu_open    ; >13 - invalid, redraw
-
+        cmp     #13
+        bcc     +            ; < 13 - valid, continue below
+        jmp     menu_open    ; >12 - invalid, redraw - JMP, not BCS:
+                               ; menu_open is now too far away for a
+                               ; branch to reach directly (this dispatch
+                               ; chain grew since BCS was first written)
++
         cmp     #1
         bne     nd1
         jsr     menu_lab_open
         jmp     menu_open
 nd1     cmp     #2
         bne     nd2
-        jsr     feat_sid_demo
+        lda     #FEAT_SID
+        sta     num_val
+        jsr     feat_call
         jmp     menu_open
 nd2     cmp     #3
         bne     nd3
-        jsr     feat_sprite_editor
+        lda     #FEAT_SPRITE_EDITOR
+        sta     num_val
+        jsr     feat_call
         jmp     menu_open
 nd3     cmp     #4
         bne     nd4
-        jsr     feat_joystick_tester
+        lda     #FEAT_CIA
+        sta     num_val
+        jsr     feat_call
         jmp     menu_open
-nd4     cmp     #6
+nd4     cmp     #5
+        bne     nd5
+        lda     #FEAT_VIC
+        sta     num_val
+        jsr     feat_call
+        jmp     menu_open
+nd5     cmp     #6
         bne     nd6
-        jsr     feat_cia_monitor
+        lda     #FEAT_MEMORY
+        sta     num_val
+        jsr     feat_call
         jmp     menu_open
-nd6     cmp     #7
-        bne     nd7
-        jsr     feat_vic_viewer
+nd6     cmp     #10
+        bne     nd10
+        jsr     menu_diag_open
         jmp     menu_open
-nd7     cmp     #8
-        bne     nd8
-        jsr     feat_memory_viewer
-        jmp     menu_open
-nd8     cmp     #13
-        bne     nd13
+nd10    cmp     #11
+        bne     nd11
         jsr     menu_fastload_open
         jmp     menu_open
-nd13
-        jsr     show_stub    ; A = 1-13, looks up the name itself
+nd11    cmp     #12
+        beq     menu_exit
+        jsr     show_stub    ; A = 7-9 in practice (1-6/10-12 all have
+                               ; real dispatch above), looks up the name
+                               ; itself
         jmp     menu_open
+
+; Shared bank_call-into-Bank-21 helper for every feat_X launch site
+; (menu_dispatch_num above, menu_diag_dispatch_num below) - num_val
+; must already hold the right FEAT_* constant (slots.asm) before this
+; runs; see feat_dispatch's own comment (bank15_content.asm) for why
+; that, not A, is the argument channel - bank_call itself already
+; claims A for the bank number.
+feat_call
+        lda     #<SLOT_FEAT_DISPATCH
+        sta     call_ptr
+        lda     #>SLOT_FEAT_DISPATCH
+        sta     call_ptr+1
+        lda     #15             ; Bank 15
+        jsr     bank_call
+        rts
 
 ; --- CARTRIDGE LAB submenu (item 1) - EPROM/flash chip tools. All six
 ; sub-items are stubs for now (no real chip read/write/program logic
@@ -185,6 +318,16 @@ nd13
 ; this project have so far only been confirmed for F1/F3/F5/F7 (menu_
 ; open above) and RUN/STOP (menu_wait above), not this one.
 menu_lab_open
+        lda     #1
+        sta     $0c          ; cur_menu (CARTRIDGE LAB=1) - literal, see
+                               ; menu_cursor's own comment for why. Must
+                               ; be set before menu_lab_draw, which
+                               ; paints the highlight
+        sta     $0a          ; lab_cursor - defaults to item 1 every
+                               ; time this submenu opens - see its own
+                               ; comment (top of file) for why this
+                               ; needs an explicit reset, unlike the
+                               ; top-level menu_cursor
         jsr     menu_lab_draw
         lda     #$00
         sta     num_val
@@ -198,6 +341,18 @@ menu_lab_wait
         cmp     #$0d         ; RETURN - dispatch the typed number
         beq     menu_lab_dispatch_num
 
+        cmp     #$11         ; CRSR DOWN
+        bne     +
+        ldy     #0
+        jsr     menu_cursor_move
+        jmp     menu_lab_wait
++
+        cmp     #$91         ; CRSR UP
+        bne     +
+        ldy     #1
+        jsr     menu_cursor_move
+        jmp     menu_lab_wait
++
         cmp     #$30         ; digit '0'-'9' ?
         bcc     menu_lab_wait
         cmp     #$3a
@@ -227,7 +382,8 @@ menu_lab_back
 menu_lab_dispatch_num
         lda     num_val
         bne     +
-        jmp     menu_lab_open  ; nothing typed - just redraw
+        lda     $0a          ; lab_cursor - nothing typed, RETURN alone
+        sta     num_val      ; activates whatever it's currently on
 +
         cmp     #7
         bcs     menu_lab_open  ; >6 - invalid, redraw
@@ -301,6 +457,9 @@ menu_lab_draw_loop
         jmp     menu_lab_draw_loop
 menu_lab_draw_done
         cli
+        jsr     menu_highlight_update  ; paint the pointer - cur_menu
+                                          ; was already set to 1 by
+                                          ; menu_lab_open before this ran
         rts
 
 lab_name01 !text "READ CHIP" : !byte 0
@@ -338,7 +497,145 @@ menu_lab_data
         !text   "SELECT: "
         !byte   $00
 
-; --- FASTLOAD SETTINGS (item 13) - shows/toggles fastload_enabled
+; --- HARDWARE DIAGNOSTICS submenu (item 10) - JOYSTICK TESTER (real,
+; feat_joystick_tester) and KEYBOARD MATRIX VIEWER (stub) used to be
+; their own top-level items 4 and 5; moved here instead so the top-
+; level list groups them under one diagnostics entry as the menu keeps
+; growing. Same submenu shape as CARTRIDGE LAB (menu_lab_open) above,
+; just two entries - see that routine's own comments for the back-
+; arrow/dispatch details, unchanged here.
+menu_diag_open
+        lda     #2
+        sta     $0c          ; cur_menu (HARDWARE DIAGNOSTICS=2) -
+                               ; literal, see menu_cursor's own comment
+                               ; for why. Must be set before menu_diag_
+                               ; draw, which paints the highlight
+        sta     $0b          ; diag_cursor - defaults to item 1 every
+                               ; time this submenu opens, same as
+                               ; lab_cursor's own reset (menu_lab_open)
+        jsr     menu_diag_draw
+        lda     #$00
+        sta     num_val
+menu_diag_wait
+        jsr     $ffe4
+        beq     menu_diag_wait
+
+        cmp     #$5f         ; back arrow - return to the main menu
+        beq     menu_diag_back
+
+        cmp     #$0d         ; RETURN - dispatch the typed number
+        beq     menu_diag_dispatch_num
+
+        cmp     #$11         ; CRSR DOWN
+        bne     +
+        ldy     #0
+        jsr     menu_cursor_move
+        jmp     menu_diag_wait
++
+        cmp     #$91         ; CRSR UP
+        bne     +
+        ldy     #1
+        jsr     menu_cursor_move
+        jmp     menu_diag_wait
++
+        cmp     #$30         ; digit '0'-'9' ?
+        bcc     menu_diag_wait
+        cmp     #$3a
+        bcs     menu_diag_wait
+        pha                  ; save the typed char to echo it
+        jsr     $ffd2
+        pla
+        sec
+        sbc     #$30         ; A = digit value 0-9
+        sta     mul_tmp
+        lda     num_val
+        asl                  ; num_val*2
+        sta     num_val
+        asl                  ; num_val*4
+        asl                  ; num_val*8
+        clc
+        adc     num_val      ; *8 + *2 = *10
+        clc
+        adc     mul_tmp      ; + digit
+        sta     num_val
+        jmp     menu_diag_wait
+menu_diag_back
+        rts                  ; menu_dispatch_num's item-10 case does
+                              ; "jmp menu_open" right after this jsr
+                              ; returns, redrawing the main menu
+
+menu_diag_dispatch_num
+        lda     num_val
+        bne     +
+        lda     $0b          ; diag_cursor - nothing typed, RETURN alone
+        sta     num_val      ; activates whatever it's currently on
++
+        cmp     #3
+        bcs     menu_diag_open  ; >2 - invalid, redraw
+
+        cmp     #1
+        bne     dd1
+        lda     #FEAT_JOYSTICK
+        sta     num_val
+        jsr     feat_call
+        jmp     menu_diag_open
+dd1     cmp     #2
+        beq     +
+        jmp     menu_diag_open ; shouldn't happen - already range-checked
++       lda     #<diag_name02
+        sta     str_ptr
+        lda     #>diag_name02
+        sta     str_ptr+1
+        jsr     show_named_stub
+        jmp     menu_diag_open
+
+diag_name02 !text "KEYBOARD MATRIX VIEWER" : !byte 0
+
+menu_diag_draw
+        lda     #$93         ; clear screen
+        jsr     $ffd2
+        lda     #<menu_diag_data
+        sta     draw_ptr
+        lda     #>menu_diag_data
+        sta     draw_ptr+1
+        sei                  ; same draw_ptr protection as menu_draw
+        ldy     #$00
+menu_diag_draw_loop
+        lda     (draw_ptr),y
+        beq     menu_diag_draw_done
+        jsr     $ffd2
+        iny
+        bne     menu_diag_draw_loop
+        inc     draw_ptr+1
+        jmp     menu_diag_draw_loop
+menu_diag_draw_done
+        cli
+        jsr     menu_highlight_update  ; paint the pointer - cur_menu
+                                          ; was already set to 2 by
+                                          ; menu_diag_open before this ran
+        rts
+
+menu_diag_data
+        !byte   $9f                                        ; cyan
+        !text   "=============================="
+        !byte   $0d
+        !text   "       HARDWARE DIAGNOSTICS"
+        !byte   $0d
+        !text   "=============================="
+        !byte   $0d,$0d
+        !byte   $9e                                        ; yellow
+        !text   "1. JOYSTICK TESTER"
+        !byte   $0d
+        !text   "2. KEYBOARD MATRIX VIEWER"
+        !byte   $0d,$0d
+        !byte   $9f                                        ; cyan
+        !text   "<- = BACK"
+        !byte   $0d,$0d
+        !byte   $05                                        ; white
+        !text   "SELECT: "
+        !byte   $00
+
+; --- FASTLOAD SETTINGS (item 11) - shows/toggles fastload_enabled
 ; (slots.asm), which DloadCmd (bank10_content.asm) checks before
 ; deciding whether to bank_call into FastDload (bank 13, real, working)
 ; or fall back to plain KERNAL_LOAD. No BASIC command for this
@@ -450,16 +747,22 @@ menu_reset
 menu_draw
         lda     #$93         ; clear screen
         jsr     $ffd2
+        ; SEI now, before menu_draw_title's screen/color-RAM poke: this
+        ; whole routine runs nested inside irq_hook's F1 dispatch with
+        ; interrupts already re-enabled (see irq_hook's own CLI before its
+        ; bank_call into here), so a stray jiffy IRQ landing mid-poke is
+        ; exactly the same class of hazard that was already found and
+        ; fixed for draw_ptr below (confirmed by watching it read back as
+        ; $0000 partway through a long print) — just widening the existing
+        ; protected window to cover the title poke too, since it's directly
+        ; adjacent and just as exposed. Held for the whole ~1/4 second this
+        ; and the print loop take.
+        sei
+        jsr     menu_draw_title
         lda     #<menu_data  ; menu_data is >255 bytes, so this needs a full
         sta     draw_ptr     ; 16-bit pointer (X-indexed would wrap at 256
         lda     #>menu_data  ; and silently truncate — bit us once already).
         sta     draw_ptr+1
-        ; SEI while we print: something in the cartridge context's IRQ path
-        ; was clobbering draw_ptr mid-loop (confirmed by watching it read
-        ; back as $0000 partway through a long print) — never observed on
-        ; the PRG target, but this print loop is long enough to span many
-        ; IRQs, so hold interrupts off for the ~1/4 second this takes.
-        sei
         ldy     #$00
 menu_draw_loop
         lda     (draw_ptr),y
@@ -471,6 +774,190 @@ menu_draw_loop
         jmp     menu_draw_loop
 menu_draw_done
         cli
+        jsr     menu_highlight_update  ; paint the pointer onto whichever
+                                          ; item menu_cursor is currently
+                                          ; on (item 1 by default - see
+                                          ; menu_cursor's own comment)
+        rts
+
+; --- Selection pointer: CRSR UP/DOWN (menu_wait/menu_lab_wait/menu_
+; diag_wait) move the CURRENT menu's own cursor (menu_cursor/lab_
+; cursor/diag_cursor, selected via cur_menu - see its own comment
+; above) and repaint the highlight; RETURN with nothing typed
+; (menu_dispatch_num/menu_lab_dispatch_num/menu_diag_dispatch_num)
+; activates whichever item it's currently on. One shared pair of
+; routines for all three menus, table-driven by cur_menu (menu_item_
+; counts/menu_item_counts_p1/menu_color_base_lo/menu_color_base_hi,
+; above) instead of three near-identical copies - Bank 14 had the room
+; for three copies (each one is small), but keeping the logic itself in
+; one place means a future bug fix or tweak doesn't have to be found
+; and repeated three times. Wraps at both ends (top->1 going down, 1-
+; >top going up) rather than stopping, same as the top-level menu
+; already did before submenus got their own pointer too.
+;
+; cur_menu doubles as the index into menu_cursor/lab_cursor/diag_cursor
+; (consecutive zero-page bytes, $09-$0b) via indexed addressing -
+; "$09,x" rather than the symbol, same oversized-addressing workaround
+; menu_cursor's own comment already explains.
+menu_cursor_move
+        ldx     $0c             ; cur_menu - literal, see menu_cursor's
+                                   ; own comment for why
+        cpy     #0              ; Y = 0 for down (call site sets it),
+        beq     mcm_down        ; nonzero for up
+        dec     $09,x
+        lda     $09,x
+        bne     mcm_done
+        lda     menu_item_counts,x
+        sta     $09,x
+        jmp     mcm_done
+mcm_down
+        inc     $09,x
+        lda     $09,x
+        cmp     menu_item_counts,x
+        beq     mcm_done        ; == count is still valid, no wrap
+        bcc     mcm_done        ; < count likewise
+        lda     #1              ; > count - wrap back to the first item
+        sta     $09,x
+mcm_done
+        jmp     menu_highlight_update
+
+; Recolors the current menu's item rows' color RAM directly (not a
+; redraw - the text itself never changes) - yellow ($9e's raw color
+; value, 7) normally, white (1) for whichever row its own cursor points
+; at. Whole-row width (40 columns) regardless of each item's actual
+; text length, same as a normal menu selection bar - simpler than
+; tracking each line's exact length, and the blank space past shorter
+; items highlighting too reads fine visually. Recoloring every row
+; unconditionally on every move (rather than just erasing the old row
+; and painting the new one) means there's no "previous position" to
+; track and nothing to go stale if this and each menu's own initial
+; draw-time call ever disagree about anything.
+menu_highlight_update
+        ldx     $0c             ; cur_menu - literal, see menu_cursor's
+                                   ; own comment for why
+        lda     $09,x           ; this menu's own cursor value
+        sta     $0d             ; mhu_cursor_val
+        lda     menu_item_counts_p1,x
+        sta     $0e             ; mhu_item_count_p1
+        lda     menu_color_base_lo,x
+        sta     draw_ptr        ; reused - menu_draw isn't running
+        lda     menu_color_base_hi,x  ; concurrently with this
+        sta     draw_ptr+1
+        ldx     #1              ; item number - X is free to become
+                                   ; this now that cur_menu's been read
+mhu_row_loop
+        lda     #$07            ; yellow (unselected)
+        cpx     $0d             ; mhu_cursor_val
+        bne     mhu_have_color
+        lda     #$01            ; white (selected)
+mhu_have_color
+        ldy     #39
+mhu_col_loop
+        sta     (draw_ptr),y
+        dey                     ; counting down to 0 needs no separate
+        bpl     mhu_col_loop    ; cpy - dey itself sets N once Y wraps
+                                  ; past 0 to $ff
+        clc                     ; advance draw_ptr to the next row down
+        lda     draw_ptr        ; (40 color-RAM bytes/row, same as
+        adc     #40             ; screen RAM - real hardware layout,
+        sta     draw_ptr        ; not a project convention)
+        bcc     +
+        inc     draw_ptr+1
++       inx
+        cpx     $0e             ; mhu_item_count_p1
+        bne     mhu_row_loop
+        rts
+
+; --- Cart Menu title: "SHACKMATE" at 2x size (both dimensions) - a
+; pixel-doubled version of the boot splash's own bold block-letter font
+; (jet_bold_font/jet_charset_setup, bank14_content.asm - same bank as
+; this file now, both having moved out of Bank 0 together), not the
+; same $80-$8F glyphs the flyby uses directly: those are single-size
+; and stay untouched so the boot splash still looks the same. The
+; doubled glyphs (jet_bold_font_big, also bank14_content.asm) patch
+; into character codes $C0-$FF instead, copied into JET_CHARSET as
+; part of jet_charset_setup's own one-time work, gated by the same
+; jet_charset_ready flag as the rest of that routine - a plain JSR
+; below, not a bank_call, since jet_charset_setup lives right here in
+; Bank 14 too (see slots.asm's SLOT_JET_CHARSET_SETUP comment for the
+; one caller that DOES still need a bank_call to reach it - bank0_
+; content.asm's jet_setup). Like the single-size glyphs, CHROUT would
+; misinterpret these codes as color/control codes rather than print
+; them, so this pokes screen/color RAM directly instead of using $ffd2.
+; $C0-$FF, not $A0-$DF (a $20 shift from the first version of this
+; code): every code 128-255 is hardwired in the real character ROM as
+; the reverse-video mirror of some code 0-127, and $A0-$DF collided
+; with reverse-space and reverse-digits - confirmed live, the SELECT:
+; prompt's blinking cursor showed a fragment of the bold "S" instead of
+; a normal block. See jet_charset_setup's own comment (bank14_content.
+; asm) for the full explanation.
+; Each letter is now 4 characters wide x 2 characters tall (doubling
+; both the original 2-wide x 1-tall size) - 9 letters x 4 columns = 36,
+; centered on the 40-column screen with 2 columns of padding either
+; side. The top half of every letter lands on one screen row, the
+; bottom half on the row below; jet_letters_big_top/bot (below) hold
+; the $C0-$FF codes in that order.
+MENU_TITLE_ROW1   = $042a   ; $0400 + 1*40 + 2 (row 1, col 2)
+MENU_TITLE_ROW2   = $0452   ; $0400 + 2*40 + 2 (row 2, col 2)
+MENU_TITLE_COLOR1 = $d82a
+MENU_TITLE_COLOR2 = $d852
+menu_draw_title
+        jsr     jet_charset_setup
+        ldy     #0
+mdt_loop
+        lda     jet_letters_big_top,y
+        sta     MENU_TITLE_ROW1,y
+        lda     jet_letters_big_bot,y
+        sta     MENU_TITLE_ROW2,y
+        lda     #$01            ; white
+        sta     MENU_TITLE_COLOR1,y
+        sta     MENU_TITLE_COLOR2,y
+        iny
+        cpy     #36
+        bne     mdt_loop
+        rts
+
+; Code pairs from bank14_content.asm's jet_bold_font_big, 4 per letter,
+; left to right, spelling "SHACKMATE" (the two As share one glyph, same
+; as jet_letters/jet_bold_font already do for the single-size font).
+jet_letters_big_top
+        !byte $c0,$c1,$c2,$c3   ; S
+        !byte $c8,$c9,$ca,$cb   ; H
+        !byte $d0,$d1,$d2,$d3   ; A
+        !byte $d8,$d9,$da,$db   ; C
+        !byte $e0,$e1,$e2,$e3   ; K
+        !byte $e8,$e9,$ea,$eb   ; M
+        !byte $d0,$d1,$d2,$d3   ; A
+        !byte $f0,$f1,$f2,$f3   ; T
+        !byte $f8,$f9,$fa,$fb   ; E
+jet_letters_big_bot
+        !byte $c4,$c5,$c6,$c7   ; S
+        !byte $cc,$cd,$ce,$cf   ; H
+        !byte $d4,$d5,$d6,$d7   ; A
+        !byte $dc,$dd,$de,$df   ; C
+        !byte $e4,$e5,$e6,$e7   ; K
+        !byte $ec,$ed,$ee,$ef   ; M
+        !byte $d4,$d5,$d6,$d7   ; A
+        !byte $f4,$f5,$f6,$f7   ; T
+        !byte $fc,$fd,$fe,$ff   ; E
+
+; Reverts $D018 to the stock charset (screen $0400, char ROM $1000) -
+; called right before leaving the menu (RUN/STOP in menu_open below).
+; Not doing this would leave a user's own program looking at
+; JET_CHARSET instead of the real character ROM: harmless for ordinary
+; text (jet_charset_setup copied the whole ROM font first, patching
+; only $80-$8F/$90/$C0-$FF), but the literal byte $90, or bytes $C0-$FF
+; in their own program, would show the copyright glyph or a SHACKMATE
+; letter fragment (single- or double-size) instead of what they
+; actually typed. $80-$8F can still collide with a reverse-video
+; capital letter (A-O) the same way $A0-$DF used to collide with
+; reverse-space/digits (see jet_charset_setup's own comment, bank14_
+; content.asm) - not fixed here, since the boot splash that uses those
+; codes has no blinking cursor to expose it; worth revisiting if that
+; ever changes.
+menu_charset_off
+        lda     #$15        ; stock: screen $0400, char ROM $1000
+        sta     $d018
         rts
 
 ; --- Generic "not implemented yet" screen ---
@@ -526,34 +1013,52 @@ name_help   !text "HELP" : !byte 0
 name_rommon !text "ROM MONITOR" : !byte 0
 name_disasm !text "DISASSEMBLER" : !byte 0
 
+; Only ASSEMBLY MONITOR/MACHINE LANGUAGE TUTORIAL/BASIC WORKSPACE (7-9)
+; still fall through to the generic show_stub lookup below - CARTRIDGE
+; LAB (1), SID MUSIC DEMO (2), SPRITE EDITOR (3), CIA TIMER MONITOR
+; (4), VIC-II REGISTER VIEWER (5), MEMORY VIEWER (6), HARDWARE
+; DIAGNOSTICS (10, its own submenu now - see menu_diag_open below) and
+; FASTLOAD SETTINGS (11) all have real explicit dispatch in
+; menu_dispatch_num, same as before - this table is kept complete for
+; all 11 anyway (not just 7-9) purely for consistency with that
+; existing pattern; the rest are simply never reached through it.
 name01 !text "CARTRIDGE LAB" : !byte 0
 name02 !text "SID MUSIC DEMO" : !byte 0
 name03 !text "SPRITE EDITOR" : !byte 0
-name04 !text "JOYSTICK TESTER" : !byte 0
-name05 !text "KEYBOARD MATRIX VIEWER" : !byte 0
-name06 !text "CIA TIMER MONITOR" : !byte 0
-name07 !text "VIC-II REGISTER VIEWER" : !byte 0
-name08 !text "MEMORY VIEWER" : !byte 0
-name09 !text "ASSEMBLY MONITOR" : !byte 0
-name10 !text "MACHINE LANGUAGE TUTORIAL" : !byte 0
-name11 !text "BASIC WORKSPACE" : !byte 0
-name12 !text "HARDWARE DIAGNOSTICS" : !byte 0
+name04 !text "CIA TIMER MONITOR" : !byte 0
+name05 !text "VIC-II REGISTER VIEWER" : !byte 0
+name06 !text "MEMORY VIEWER" : !byte 0
+name07 !text "ASSEMBLY MONITOR" : !byte 0
+name08 !text "MACHINE LANGUAGE TUTORIAL" : !byte 0
+name09 !text "BASIC WORKSPACE" : !byte 0
+name10 !text "HARDWARE DIAGNOSTICS" : !byte 0
+name11 !text "FASTLOAD SETTINGS" : !byte 0
 
 item_lo !byte <name01,<name02,<name03,<name04,<name05,<name06
-        !byte <name07,<name08,<name09,<name10,<name11,<name12
+        !byte <name07,<name08,<name09,<name10,<name11
 item_hi !byte >name01,>name02,>name03,>name04,>name05,>name06
-        !byte >name07,>name08,>name09,>name10,>name11,>name12
+        !byte >name07,>name08,>name09,>name10,>name11
 
-; No "|" side borders here — like "©" earlier, PETSCII "|" doesn't render as
-; a vertical bar in the default charset. Stick to "=" (already proven safe,
-; used in the splash) instead of guessing at another graphic character.
+; Rows 0-2 are left blank here on purpose - rows 1 and 2 get the bold
+; 2x-size "SHACKMATE" title poked directly into screen/color RAM by
+; menu_draw_title (called from menu_draw, above), not printed via
+; CHROUT - see that routine's own comment for why. These four leading
+; $0D's just advance the cursor past them without touching their
+; content, so this print picks back up at row 4 with the subtitle. No
+; "====" divider below the subtitle any more - the bigger title reads
+; clearly enough on its own that the divider just added visual noise
+; between it and the item list.
+; Row-budget note (learned the hard way once already - see git history
+; for "pushed off the screen"): this whole block has to land "SELECT: "
+; on row 24, the screen's last one, with zero rows to spare - one more
+; blank row anywhere below would overflow to a nonexistent row 25 and
+; scroll the whole screen (title included) up and off the top.
+; Item rows start at MENU_ITEM_FIRST_ROW (menu_highlight_update, above)
+; - keep that constant in sync if this layout changes again.
 menu_data
+        !byte   $0d,$0d,$0d,$0d
         !byte   $9f                                        ; cyan
-        !text   "=============================="
-        !byte   $0d
-        !text   " C64 ULTIMATE SDK - SHACKMATE"
-        !byte   $0d
-        !text   "=============================="
+        !text   "           SUPER CARTRIDGE V1"
         !byte   $0d,$0d
         !byte   $9e                                        ; yellow
         !text   "1. CARTRIDGE LAB"
@@ -562,25 +1067,23 @@ menu_data
         !byte   $0d
         !text   "3. SPRITE EDITOR"
         !byte   $0d
-        !text   "4. JOYSTICK TESTER"
+        !text   "4. CIA TIMER MONITOR"
         !byte   $0d
-        !text   "5. KEYBOARD MATRIX VIEWER"
+        !text   "5. VIC-II REGISTER VIEWER"
         !byte   $0d
-        !text   "6. CIA TIMER MONITOR"
+        !text   "6. MEMORY VIEWER"
         !byte   $0d
-        !text   "7. VIC-II REGISTER VIEWER"
+        !text   "7. ASSEMBLY MONITOR"
         !byte   $0d
-        !text   "8. MEMORY VIEWER"
+        !text   "8. MACHINE LANGUAGE TUTORIAL"
         !byte   $0d
-        !text   "9. ASSEMBLY MONITOR"
+        !text   "9. BASIC WORKSPACE"
         !byte   $0d
-        !text   "10. MACHINE LANGUAGE TUTORIAL"
+        !text   "10. HARDWARE DIAGNOSTICS"
         !byte   $0d
-        !text   "11. BASIC WORKSPACE"
+        !text   "11. FASTLOAD SETTINGS"
         !byte   $0d
-        !text   "12. HARDWARE DIAGNOSTICS"
-        !byte   $0d
-        !text   "13. FASTLOAD SETTINGS"
+        !text   "12. EXIT"
         !byte   $0d,$0d
         !byte   $9f                                        ; cyan
         !text   "F1 = HELP"
@@ -652,6 +1155,7 @@ msg
         !text   "GOTTA LOVE ASSEMBLER !!!"
         !byte   $0d, $00
 
-!source "features.asm"
-!source "bitmap.asm"
-!source "spriteeditor.asm"
+; No "!source features.asm/bitmap.asm/spriteeditor.asm" here any more -
+; they moved to Bank 15 (bank15_content.asm), reached through
+; feat_call/feat_dispatch above instead of a plain same-bank JSR - see
+; slots.asm's SLOT_FEAT_DISPATCH comment for the full story.

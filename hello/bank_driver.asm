@@ -1,21 +1,27 @@
 ; Shared top-level file for every bank's ROML ($8000-$9FFF) build - built
-; once per bank (20 banks total: 0-19; see build_cart.sh), with
+; once per bank (22 banks total: 0-21; see build_cart.sh), with
 ; -DBANKNUM=n selecting which bank's content gets included. Content
-; occupies $8000-$97BF; the resident kernel (resident.asm, identical in
-; every bank) always sits at the fixed $97C0-$9FFF range (2112 bytes -
-; widened from 1024, then 2048, as the extended-command token tables
-; kept growing) so it works regardless of which bank happens to be
-; switched in - see resident.asm for why that matters. Every bank's own
-; content has huge headroom below this boundary (bank 0, the tightest,
-; still had ~1.2KB free when this last moved) - moving it costs no
-; bank anything meaningful.
+; occupies $8000-BANK_CONTENT_START (slots.asm); the resident kernel
+; (resident.asm, identical in every bank) always sits at the fixed
+; $97C0-$9FFF range (2112 bytes - widened from 1024, then 2048, as the
+; extended-command token tables kept growing) so it works regardless of
+; which bank happens to be switched in - see resident.asm for why that
+; matters.
 ;
-; Bank 12 has no content yet (reserved for the later SERIAL plan) and
-; falls straight through to the padding below with nothing sourced - an
-; all-$FF ROML, matching real erased-flash state. Banks 14-19 are the
-; same, deliberately: genuinely empty, user-programmable space - see
-; slots.asm's FIRST_USER_BANK comment for the protected/user-bank
-; policy this boundary is part of.
+; Bank 0 holds only cart_start and the boot splash now - the F1 Cart
+; Menu (common.asm) moved out to Bank 14, and the feature implementations
+; it launches (features.asm/bitmap.asm/spriteeditor.asm) moved to
+; Bank 15 right after it, once it turned out Bank 14 couldn't hold
+; common.asm AND all three of those together either - see bank0_
+; content.asm's, bank14_content.asm's, and slots.asm's SLOT_JET_
+; CHARSET_SETUP/SLOT_FEAT_DISPATCH comments for the full story. Bank 0
+; has plenty of headroom again as a result. Bank 12 has no content yet
+; (reserved for the later SERIAL plan) and falls straight through to
+; the padding below with nothing sourced - an all-$FF ROML, matching
+; real erased-flash state. Banks 16-21 are the same, deliberately:
+; genuinely empty, user-programmable space - see slots.asm's FIRST_
+; USER_BANK comment for the protected/user-bank policy this boundary is
+; part of.
 
 *=$8000
 
@@ -61,7 +67,13 @@
 !if BANKNUM = 13 {
         !source "bank13_content.asm"
 }
-; Banks 14-19: user-programmable range, intentionally no content.
+!if BANKNUM = 14 {
+        !source "bank14_content.asm"
+}
+!if BANKNUM = 15 {
+        !source "bank15_content.asm"
+}
+; Banks 16-21: user-programmable range, intentionally no content.
 
 !if * > $97c0 {
         !error "bank content overflowed into the resident kernel region ($97c0)"

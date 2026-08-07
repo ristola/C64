@@ -92,9 +92,9 @@ BAS_DATAPTR_RESET = $a81d
 
 ; Reserved slot-table range continues to $80FF regardless of how many
 ; slots this bank actually fills in.
-!fill $8100-*, $ff
+!fill BANK_CONTENT_START-*, $ff
 
-*=$8100
+*=BANK_CONTENT_START
 
 ; --- DEVICE <n>: set the default device number used by every other
 ; DISK command (0-255). Originally used BAS_FRMNUM/BAS_GETADR (real

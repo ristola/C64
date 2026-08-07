@@ -1,9 +1,24 @@
-; Bank 0 content: Boot/Menu. cart_start and everything under menu_open
-; (common.asm/features.asm/bitmap.asm/spriteeditor.asm) are unchanged
-; from the single-bank design - nothing in that call graph ever leaves
-; Bank 0's own address space, so it's a copy-paste, not a rewrite.
+; Bank 0 content: Boot only - cart_start and the boot splash (jet_setup/
+; tower_anim_start/JetCmd/jet_sprite). The F1 Cart Menu (menu_open and
+; everything under it - common.asm, and features.asm/bitmap.asm/
+; spriteeditor.asm which common.asm itself !source's) used to live here
+; too ("nothing leaves Bank 0's own address space", a leftover from
+; porting the original single-bank design), but Bank 0 filled up
+; completely - twice - as menu features kept growing (first the 2x-size
+; title's glyph data, then the EXIT item + selection-pointer cursor),
+; and there's more menu work still to come. Rather than keep rescuing
+; one oversized piece into an ad-hoc home each time it happened again,
+; the whole menu moved out to Bank 14, leaving Bank 0 with just what
+; actually has to run at hardware reset or during the boot-time flyby -
+; see slots.asm's SLOT_JET_CHARSET_SETUP comment and bank14_content.
+; asm's own header for the rest of the story. jet_charset_setup itself
+; (the character-ROM copy the flyby's bold lettering needs) moved to
+; Bank 14 too, since menu_draw_title (common.asm) is its other caller -
+; jet_setup below now reaches it via a nested bank_call instead of a
+; plain JSR.
+;
 ; irq_hook/read_f1/zp_save/zp_restore/save_screen/restore_screen and
-; the BASIC-extension dispatcher moved OUT to resident.asm, since those
+; the BASIC-extension dispatcher live in resident.asm, since those
 ; have to work regardless of which bank happens to be switched in -
 ; see resident.asm for why.
 
@@ -51,8 +66,9 @@
 ; bank_driver.asm assembles this file and resident.asm as one unit.
 
 ; --- Fixed-slot jump table entries for this bank (slots.asm) ---
-!fill SLOT_MENU_OPEN-*, $ff
-        jmp     menu_open
+; No SLOT_MENU_OPEN entry any more - menu_open lives in Bank 14 now
+; (see this file's own header comment); irq_hook (resident.asm)
+; bank_calls there directly instead of through here.
 !fill SLOT_TOWER_ANIM_START-*, $ff
         jmp     tower_anim_start
 !fill SLOT_JET-*, $ff
@@ -63,9 +79,9 @@
 ; Reserved slot-table range continues to $80FF regardless of how many
 ; slots this bank actually fills in - keeps it available for later
 ; slots without ever having to relocate cart_start.
-!fill $8100-*, $ff
+!fill BANK_CONTENT_START-*, $ff
 
-*=$8100
+*=BANK_CONTENT_START
 cart_start
 ; The cart-autostart check happens right at the top of the KERNAL's reset
 ; routine — before it initializes the VIC-II/screen editor, CIA/IRQ timers,
@@ -126,12 +142,20 @@ cart_start
                                    ; the jet animation/F1 menu forever,
                                    ; the exact symptom this counter itself
                                    ; was added to fix
-        sta     jet_charset_ready  ; jet_charset_setup below sets this
-                                     ; itself once the copy below completes
+        sta     jet_charset_ready  ; jet_charset_setup (bank 14) sets
+                                     ; this itself once its copy completes
         lda     #1
         sta     fastload_enabled  ; FASTLOAD defaults to ON every power
                                     ; cycle/REBOOT - see slots.asm's own
                                     ; comment on why this doesn't persist
+        sta     $09          ; menu_cursor (common.asm) - literal, not
+                               ; the symbol; see its own comment for why.
+                               ; Top-level Cart Menu's selection pointer
+                               ; defaults to item 1 - only set here,
+                               ; once; see that comment for how it stays
+                               ; at 1 on every
+                               ; subsequent F1 press without needing to
+                               ; be reset again
         lda     #8
         sta     disk_device ; DISK category's default device number
 
@@ -162,7 +186,19 @@ cart_copy_trampoline
 ; isn't one running yet. jet_charset_setup itself sets jet_charset_ready
 ; when it finishes, so jet_setup's own later call (from the real
 ; animation start) just takes the cheap $D018-repoint path.
-        jsr     jet_charset_setup
+;
+; bank_call, not a plain JSR - jet_charset_setup lives in Bank 14 now
+; (slots.asm's SLOT_JET_CHARSET_SETUP comment has the full story).
+; Safe to nest this early: cur_bank/bank_call_depth are already
+; initialized above, interrupts don't need to be on for bank_call
+; itself to work, and jet_charset_setup_xbank's own bank_return leaves
+; cur_bank back at 0 before this continues.
+        lda     #<SLOT_JET_CHARSET_SETUP
+        sta     call_ptr
+        lda     #>SLOT_JET_CHARSET_SETUP
+        sta     call_ptr+1
+        lda     #14             ; Bank 14
+        jsr     bank_call
 
         cli                 ; re-enable interrupts (delay loop needs the jiffy clock)
 
@@ -243,7 +279,8 @@ JET_FLY_TICKS   = 127
 JET_HOLD_TICKS  = 30
 JET_FADE_TICKS  = 63
 JET_TOTAL_TICKS = JET_FLY_TICKS + JET_HOLD_TICKS + JET_FADE_TICKS
-JET_CHARSET     = $2800
+; No JET_CHARSET here any more - only jet_charset_setup ever referenced
+; it, and that moved to Bank 14 along with the constant's own copy.
 
 ; Reached two ways now: once automatically at boot (tower_anim_start,
 ; bank_call'd from irq_hook, ending via bank_return) and on demand via
@@ -268,7 +305,18 @@ tas_copy_sprite
         cpx     #63          ; else touches it this soon after boot
         bne     tas_copy_sprite
 
-        jsr     jet_charset_setup
+; bank_call into Bank 14 - see cart_start's own identical call for why
+; (jet_charset_setup moved there). Nested one level deeper here than
+; cart_start's own call: tower_anim_start/JetCmd already reached this
+; bank via their own bank_call from irq_hook/OkExt before jet_setup
+; (this routine) runs - explicitly supported, see bank_call's own
+; bank_call_depth comment (resident.asm).
+        lda     #<SLOT_JET_CHARSET_SETUP
+        sta     call_ptr
+        lda     #>SLOT_JET_CHARSET_SETUP
+        sta     call_ptr+1
+        lda     #14             ; Bank 14
+        jsr     bank_call
 
         ldx     #$00        ; blank the SHACKMATE text row before the
 tas_clear_text                ; jet has painted anything into it - 18
@@ -353,132 +401,10 @@ JetCmd
 RebootCmd
         jmp     ($fffc)
 
-; Copies via indirect-indexed addressing (2 zero-page pointer pairs)
-; rather than unrolled page-relative LDA/STA pairs - smaller code.
-; Borrows $10-$13 (ultimate_sdk.asm's own scratch range) only
-; transiently, only during this one-time boot-time copy, well before
-; any NETWORK command could possibly be in flight to actually be using
-; them. The VIC-II hardwires character ROM at $1000-$1FFF (relative to
-; VIC bank 0, which this whole project already assumes) regardless of
-; what's written to CPU-visible RAM there, so the custom charset needs
-; a genuinely different location - $2800-$2FFF (block 5) is free: not
-; zero page/stack/vectors, not screen memory ($0400-$07FF), and past
-; the sprite scratch block ($2000, only 64 bytes, used transiently).
-;
-; Copying the real character ROM requires briefly clearing CHAREN (bit
-; 2 of $01) so it's visible at $D000-$D7FF instead of the I/O registers
-; ($D000-$DFFF normally shows VIC/SID/CIA/color RAM) - during that
-; window the CPU can't see those registers at all, so an IRQ landing
-; here and touching any of them would silently corrupt something. SEI
-; for the whole copy, same reasoning as every other bank-switch-
-; adjacent critical section in this project - safe here specifically
-; because this whole routine only ever runs from inside irq_hook's own
-; IRQ context, which already has interrupts hardware-disabled on entry.
-; No SEI/CLI here (an earlier version had one, wrongly copied from
-; other bank-switch-adjacent code in this project). This is reached
-; two ways now (tower_anim_start's boot-time bank_call from irq_hook's
-; own hardware IRQ context, and JetCmd's on-demand bank_call from
-; OkExt/resident.asm's command dispatch, which holds its own SEI for
-; the whole visit) - both already guarantee interrupts are disabled for
-; this routine's entire duration, so there's no reentrancy gap to
-; protect against in the first place. An explicit CLI here previously
-; re-enabled interrupts mid-execution, before the natural point
-; interrupts should come back on - confirmed live as the actual cause
-; of a real regression (broke keyboard input AND the F1 menu for the
-; rest of the session, from a single one-time corruption event).
-; CHAREN still needs protecting from OUR OWN code just below (nothing
-; else should touch $D000-$D7FF while it's borrowed for the char ROM
-; view), just not via SEI/CLI.
-;
-; jet_charset_ready (slots.asm) skips the expensive part (the 2KB ROM
-; copy + glyph patch) on every call after the first - the $2800 data
-; never changes once written, so JET re-triggering the animation later
-; only needs to re-point $D018, not redo the whole copy. Shortens how
-; long interrupts stay disabled on every call after boot's own first
-; one, which can only help if there's still some reentrancy-adjacent
-; edge case here that hasn't been found yet.
-jet_charset_setup
-        lda     jet_charset_ready
-        bne     jcs_repoint
-        lda     #$01
-        sta     jet_charset_ready
-        lda     $01
-        pha
-        and     #$fb        ; clear CHAREN - char ROM visible at $D000
-        sta     $01
-        lda     #$00
-        sta     $10         ; source ptr lo ($D0xx)
-        sta     $12         ; dest ptr lo (JET_CHARSET+xx)
-        lda     #$d0
-        sta     $11         ; source ptr hi
-        lda     #>JET_CHARSET
-        sta     $13         ; dest ptr hi
-        ldx     #$08        ; 8 pages = 2KB
-jcs_page_loop
-        ldy     #$00
-jcs_byte_loop
-        lda     ($10),y
-        sta     ($12),y
-        iny
-        bne     jcs_byte_loop
-        inc     $11
-        inc     $13
-        dex
-        bne     jcs_page_loop
-        pla
-        sta     $01         ; CHAREN back on - I/O registers visible again
-
-        ldx     #$00        ; patch the 16 custom bold-letter-half
-jcs_patch                     ; glyphs over character codes $80-$8F -
-        lda     jet_bold_font,x  ; reverse-video space range, unused
-        sta     JET_CHARSET+$400,x  ; anywhere on this boot screen
-        inx
-        cpx     #128        ; 16 chars x 8 bytes
-        bne     jcs_patch
-
-        ldx     #$00        ; patch the copyright-symbol glyph over
-jcs_patch_copy                ; character code $90
-        lda     jet_copyright_glyph,x
-        sta     JET_CHARSET+($90*8),x
-        inx
-        cpx     #8
-        bne     jcs_patch_copy
-
-jcs_repoint
-        lda     #$1a        ; screen still at $0400 (block 1), charset
-        sta     $d018       ; now at $2800 (block 5)
-        rts
-
-; 8 unique letters (S H A C K M T E - "SHACKMATE" has two As, sharing
-; one glyph pair), each 16x8 bold pixels split into a left-half and
-; right-half 8x8 character, in that order, matching resident.asm's
-; jet_letters $80-$8F assignments. Designed as simple bold block
-; letters (not a pixel-exact match to the ROM font - just legible and
-; consistently bold) via scratchpad/gen_boldfont.py, hand-checked as
-; ASCII art before encoding.
-jet_bold_font
-        !byte $7f, $ff, $e0, $7f, $00, $00, $ff, $7f  ; S left
-        !byte $fe, $ff, $00, $f8, $7f, $03, $ff, $fe  ; S right
-        !byte $f0, $f0, $f0, $ff, $ff, $f0, $f0, $f0  ; H left
-        !byte $0f, $0f, $0f, $ff, $ff, $0f, $0f, $0f  ; H right
-        !byte $0f, $3f, $79, $f0, $ff, $ff, $f0, $f0  ; A left
-        !byte $f0, $fc, $9e, $0f, $ff, $ff, $0f, $0f  ; A right
-        !byte $1f, $7f, $f0, $f0, $f0, $f0, $7f, $1f  ; C left
-        !byte $f8, $fe, $00, $00, $00, $00, $fe, $f8  ; C right
-        !byte $f0, $f0, $f0, $ff, $ff, $f0, $f0, $f0  ; K left
-        !byte $3e, $7c, $f8, $c0, $c0, $f8, $7c, $3e  ; K right
-        !byte $e0, $f0, $fc, $f7, $f3, $f0, $f0, $f0  ; M left
-        !byte $07, $0f, $3f, $ef, $cf, $0f, $0f, $0f  ; M right
-        !byte $ff, $ff, $0f, $0f, $0f, $0f, $0f, $0f  ; T left
-        !byte $ff, $ff, $c0, $c0, $c0, $c0, $c0, $c0  ; T right
-        !byte $ff, $ff, $f0, $ff, $ff, $f0, $ff, $ff  ; E left
-        !byte $ff, $ff, $00, $f0, $f0, $00, $ff, $ff  ; E right
-
-; Small circle-C copyright symbol, character code $90 - single normal-
-; width 8x8 glyph (not a left/right pair like the bold font above),
-; used once in the copyright line below SHACKMATE.
-jet_copyright_glyph
-        !byte $7e, $81, $bd, $a1, $a1, $bd, $81, $7e
+; jet_charset_setup (the character-ROM copy this flyby's bold lettering
+; needs, plus jet_bold_font/jet_copyright_glyph, the data it patches
+; in) moved to Bank 14 - see slots.asm's SLOT_JET_CHARSET_SETUP comment
+; for the full story and bank14_content.asm for the routine itself.
 
 ; 4-color (multicolor mode) 12x21-effective-pixel sprite: an original
 ; commercial-jet design flying nose-right for the left-to-right flyby.
@@ -499,4 +425,5 @@ jet_sprite
         !byte $ff, $56, $a0, $ff, $56, $a8, $3d, $5a, $a8, $0d, $5a, $a8, $ff, $56, $a8, $ff, $56, $a0, $fd, $55, $80
         !byte $f5, $55, $00, $55, $54, $00, $15, $50, $00, $05, $40, $00, $01, $00, $00, $00, $00, $00, $00, $00, $00
 
-!source "common.asm"
+; No "!source common.asm" here any more - the whole F1 Cart Menu moved
+; to Bank 14 (see this file's own header comment).

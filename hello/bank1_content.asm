@@ -29,9 +29,9 @@
 
 ; Reserved slot-table range continues to $80FF regardless of how many
 ; slots this bank actually fills in.
-!fill $8100-*, $ff
+!fill BANK_CONTENT_START-*, $ff
 
-*=$8100
+*=BANK_CONTENT_START
 
 ; --- CLS: clear the screen. As simple as a new command gets. ---
 ; Every cross-bank-callable routine has to finish via bank_return/

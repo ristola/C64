@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build the 20-bank EasyFlash cartridge image.
+# Build the 22-bank EasyFlash cartridge image.
 #
 # Each bank is a separate ACME assembly of bank_driver.asm (content
 # $8000-$9BFF + the identical resident kernel at $9C00-$9FFF - see
@@ -38,7 +38,7 @@ if [ "$(wc -c < ../build/bank0_romh.bin)" -ne 8192 ]; then
     exit 1
 fi
 
-for n in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19; do
+for n in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21; do
     echo "=== Bank $n ROML ==="
     REPORT_FLAG=""
     if [ "$n" = "0" ]; then

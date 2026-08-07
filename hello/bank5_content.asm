@@ -63,9 +63,9 @@ CHR_QUOTE   = $22
 
 ; Reserved slot-table range continues to $80FF regardless of how many
 ; slots this bank actually fills in.
-!fill $8100-*, $ff
+!fill BANK_CONTENT_START-*, $ff
 
-*=$8100
+*=BANK_CONTENT_START
 
 DumpCmd
         ldx     #0
@@ -293,7 +293,7 @@ fse_msg
 
 ; --- Writes A as 2 uppercase hex digit chars to ($62),Y, Y+=2 on
 ; return. Local, self-contained variant of features.asm's print_hex
-; (that one prints via CHROUT and lives in Bank 0's own content - not
+; (that one prints via CHROUT and lives in Bank 14's content - not
 ; reachable from here without a full bank_call, not worth it for two
 ; instructions' difference). ---
 hex_write_byte
