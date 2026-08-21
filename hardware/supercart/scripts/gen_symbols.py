@@ -204,13 +204,17 @@ flash_right = [
 # ---------------------------------------------------------------------------
 # C64 44-pin cartridge edge connector. Pin map from c64-wiki.com "Expansion Port"
 # page, parsed directly from the article's HTML <table> (not the AI summary).
-# Pins "3" and "A" are documented blank in that table; treated as reserved/NC
-# here rather than guessing a function for them.
+# Pins "3" and "A" are documented blank in that table (no assigned function),
+# but a real, independently-found board (hardware/TestBoard/EpyxFastLoad.kicad_pcb,
+# an actual Epyx FastLoad cartridge reproduction whose connector pinout was
+# cross-checked pin-for-pin against this table and matched on every other
+# pin) ties pin 3 to +5V and pin A to GND rather than leaving them floating --
+# adopted here on that real precedent, per user confirmation 2026-08-21.
 # ---------------------------------------------------------------------------
 edge_left = [
     ("1", "GND", "passive"),
     ("2", "VCC", "passive"),
-    ("3", "RESERVED_3", "no_connect"),
+    ("3", "VCC", "passive"),
     ("4", "IRQ_N", "passive"),
     ("5", "RW", "passive"),
     ("6", "DOTCLK", "passive"),
@@ -232,7 +236,7 @@ edge_left = [
     ("22", "GND", "passive"),
 ]
 edge_right = [
-    ("A", "RESERVED_A", "no_connect"),
+    ("A", "GND", "passive"),
     ("B", "ROMH_N", "passive"),
     ("C", "RESET_N", "passive"),
     ("D", "NMI_N", "passive"),

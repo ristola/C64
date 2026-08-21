@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
 Custom footprint for the C64 44-pin cartridge edge connector ("goldfingers").
-Geometry verified 2026-08-20 from the real, fabricated skoe EasyFlash 2 board's
-own Gerbers (FrankBuss/kerberos GitHub mirror, ef2-kicad/ef2-gerber/*.pho),
-not guessed: 22 pads/side, pitch 2.54mm exactly, pad 1.524mm x 6.35mm oval,
-long axis perpendicular to the board edge, top/bottom pads at identical X.
+Geometry verified 2026-08-21 from a real, independently-found board
+(hardware/TestBoard/EpyxFastLoad.kicad_pcb, an actual Epyx FastLoad cartridge
+reproduction; footprint "EXPANSIO_SQ"): 22 pads/side, pitch 2.54mm, pads
+RECTANGULAR 1.5mm x 9mm, long axis perpendicular to the board edge, top/bottom
+pads at identical X. (An earlier revision used 1.524x6.35mm oval pads sourced
+from the real skoe EasyFlash 2 Gerbers -- also a real, working design; the
+Epyx board's rectangular pads were adopted per user choice 2026-08-21 since
+it's the more recently and more thoroughly cross-verified of the two sources.)
 
 Two independent pads exist at each of the 22 X positions -- one on F.Cu (the
 "lettered" A-Z side) and one on B.Cu (the "numbered" 1-22 side) -- these are
@@ -18,15 +22,15 @@ from kiutils.footprint import Footprint, Pad
 from kiutils.items.common import Position
 
 PITCH = 2.54
-PAD_W = 1.524   # 0.060"
-PAD_L = 6.35    # 0.250"
+PAD_W = 1.5   # matches EpyxFastLoad's EXPANSIO_SQ footprint exactly
+PAD_L = 9.0
 N = 22
 
 # Same left/right pin lists as the schematic symbol (gen_symbols.py) -- keep in sync.
-edge_left = ["GND", "VCC", "RESERVED_3", "IRQ_N", "RW", "DOTCLK", "IO1_N", "GAME_N",
+edge_left = ["GND", "VCC", "VCC", "IRQ_N", "RW", "DOTCLK", "IO1_N", "GAME_N",
              "EXROM_N", "IO2_N", "ROML_N", "BA", "DMA_N", "D7", "D6", "D5", "D4", "D3",
              "D2", "D1", "D0", "GND"]
-edge_right = ["RESERVED_A", "ROMH_N", "RESET_N", "NMI_N", "PHI2", "A15", "A14", "A13",
+edge_right = ["GND", "ROMH_N", "RESET_N", "NMI_N", "PHI2", "A15", "A14", "A13",
               "A12", "A11", "A10", "A9", "A8", "A7", "A6", "A5", "A4", "A3", "A2", "A1",
               "A0", "GND"]
 edge_left_num = [str(i) for i in range(1, 23)]
@@ -50,13 +54,13 @@ for i in range(N):
     # included (no soldermask over the goldfingers) but no paste -- these are
     # bare plated contacts, never soldered.
     pads.append(Pad(
-        number=edge_left_num[i], type="smd", shape="oval",
+        number=edge_left_num[i], type="smd", shape="rect",
         position=Position(x, 0, 0), size=Position(PAD_W, PAD_L),
         layers=["B.Cu", "B.Mask"],
     ))
     # F.Cu pad = "lettered" side (schematic pin numbers "A".."Z", skipping G/I/O/Q)
     pads.append(Pad(
-        number=edge_right_num[i], type="smd", shape="oval",
+        number=edge_right_num[i], type="smd", shape="rect",
         position=Position(x, 0, 0), size=Position(PAD_W, PAD_L),
         layers=["F.Cu", "F.Mask"],
     ))

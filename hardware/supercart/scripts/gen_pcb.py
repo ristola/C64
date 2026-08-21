@@ -14,9 +14,9 @@ Requires: pip install kiutils. Run after gen_footprints.py and gen_symbols.py.
 """
 import uuid, re
 
-from kiutils.board import Board, GeneralSettings, LayerToken, SetupData, GrLine, GrText
+from kiutils.board import Board, GeneralSettings, LayerToken, SetupData, GrLine, GrArc, GrText
 from kiutils.footprint import Footprint
-from kiutils.items.common import Position, Net as CommonNet
+from kiutils.items.common import Position, Effects, Font, Net as CommonNet
 from kiutils.board import Net as BoardNet
 
 PROJECT_DIR = "/Users/rts/Development/C64/hardware/supercart"
@@ -90,8 +90,10 @@ board.setup = SetupData(packToMaskClearance=0.05, solderMaskMinWidth=0.1)
 # step in this pipeline (kicad-cli has no headless "update pcb from schematic").
 # ---------------------------------------------------------------------------
 nets = {
-    "VCC": [("J1", "2"), ("U1", "24"), ("U2", "44"), ("U2", "23")],
-    "GND": [("J1", "1"), ("J1", "22"), ("J1", "Z"), ("U1", "12"), ("U2", "21"), ("U2", "22")],
+    # Pins 3/A: tied to +5V/GND per a real precedent found in
+    # hardware/TestBoard/EpyxFastLoad.kicad_pcb -- see gen_schematic.py's note.
+    "VCC": [("J1", "2"), ("J1", "3"), ("U1", "24"), ("U2", "44"), ("U2", "23"), ("C1", "1"), ("C2", "1")],
+    "GND": [("J1", "1"), ("J1", "22"), ("J1", "A"), ("J1", "Z"), ("U1", "12"), ("U2", "21"), ("U2", "22"), ("C1", "2"), ("C2", "2")],
     "PHI2": [("J1", "E"), ("U1", "1")],
     "IO1_N": [("J1", "7"), ("U1", "10")],
     "RW": [("J1", "5"), ("U1", "11")],
@@ -151,13 +153,18 @@ for name, members in nets.items():
         pin_to_net[(ref, num)] = name
 
 
+FOOTPRINT_DIR = "/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints"
 FP_FILES = {
     "Package_SO:SOIC-24W_7.5x15.4mm_P1.27mm":
-        "/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints/Package_SO.pretty/SOIC-24W_7.5x15.4mm_P1.27mm.kicad_mod",
+        f"{FOOTPRINT_DIR}/Package_SO.pretty/SOIC-24W_7.5x15.4mm_P1.27mm.kicad_mod",
     "Package_SO:SOP-44_13.3x28.2mm_P1.27mm":
-        "/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints/Package_SO.pretty/SOP-44_13.3x28.2mm_P1.27mm.kicad_mod",
+        f"{FOOTPRINT_DIR}/Package_SO.pretty/SOP-44_13.3x28.2mm_P1.27mm.kicad_mod",
     "supercart:C64_EDGE_CONNECTOR_44":
         f"{PROJECT_DIR}/supercart.pretty/C64_EDGE_CONNECTOR_44.kicad_mod",
+    "Capacitor_SMD:C_0805_2012Metric":
+        f"{FOOTPRINT_DIR}/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod",
+    "MountingHole:MountingHole_3.2mm_M3":
+        f"{FOOTPRINT_DIR}/MountingHole.pretty/MountingHole_3.2mm_M3.kicad_mod",
 }
 
 
@@ -181,12 +188,30 @@ def load_footprint(lib_id, ref, value, x, y, rot=0):
 
 # ---------------------------------------------------------------------------
 # Placement. Board outline width (57.66mm) matches the real, fab-verified
-# EasyFlash connector-region width (see reference_supercart_pinouts.md).
-# Length (90mm) is a practical first-pass choice, not shell-matched -- this
-# is a socketed prototype per the project's own Phase 1 hardware notes.
+# EasyFlash connector-region width (see reference_supercart_pinouts.md) --
+# this is a hard requirement (the connector must physically fit the C64
+# slot), unlike length, which is a practical first-pass choice (socketed
+# prototype per the project's Phase 1 hardware notes, not shell-matched).
+#
+# Layout below is side-by-side ICs above the connector (visual style modeled
+# after a reference image the user provided -- NOT its pinout, which
+# contradicted the real SUPER_CART_R01.PLD and was rejected; see conversation
+# notes). U1/U2 kept at their natural (unrotated) orientation, which puts
+# their pin rows on the left/right sides -- confirmed correct by rendering
+# and visually checking pad placement earlier in this project.
 # ---------------------------------------------------------------------------
-BOARD_W = 57.66
-BOARD_L = 90.0
+# BOARD_W matches hardware/TestBoard/EpyxFastLoad.kicad_pcb's real width
+# (58.0mm exactly) per user request 2026-08-21. Its height (37.9mm) is NOT
+# matched -- physically unreachable with our parts at their natural
+# orientation: the AM29F080B body alone is 28.2mm long (real, verified from
+# its datasheet), already leaving no room for the connector + margins in
+# 37.9mm total. TestBoard's own chips (DIL28-6, DIL-14 -- small DIP EPROM/
+# logic parts) are far smaller than our 44-pin SO-44 flash. Height is instead
+# tightened as far as our real components allow (~75mm -> ~60mm), keeping
+# the ICs unrotated -- confirmed by user choice over rotating them, which
+# would revisit the KiCad rotated-roundrect-pad DRC bug found earlier.
+BOARD_W = 58.0
+BOARD_L = 60.0
 BOARD_X0, BOARD_Y0 = 0.0, 0.0  # top-left corner of the board outline
 
 # J1: connector pads sit ON the board's bottom edge (matches real cartridges --
@@ -196,34 +221,136 @@ BOARD_X0, BOARD_Y0 = 0.0, 0.0  # top-left corner of the board outline
 J1_X = BOARD_X0 + BOARD_W / 2
 J1_Y = BOARD_Y0 + BOARD_L - 5.0
 
-# U1 (ATF22V10C, 15.4 x 7.5mm) and U2 (AM29F080B, 28.2 x 13.3mm): placed with
-# generous clearance in the body of the board, above the connector. This is a
-# reasonable first-pass placement (DRC-checked for overlaps), not a routing-
-# optimized final layout -- expect to rearrange after seeing the ratsnest.
-U1_X, U1_Y = BOARD_X0 + BOARD_W / 2, BOARD_Y0 + 25.0
-U2_X, U2_Y = BOARD_X0 + BOARD_W / 2, BOARD_Y0 + 55.0
+# U1 (ATF22V10C, 7.5w x 15.4h) and U2 (AM29F080B, 13.3w x 28.2h), side by
+# side, top-aligned, centered as a group within the board width. Each uses
+# its OWN half-height for the Y offset so their top edges truly align (an
+# earlier version of this script reused U1's half-height for both, which
+# left U2 mis-aligned -- harmless at the old, generous 75mm board length but
+# worth fixing now that height is tight).
+GAP = 8.0
+GROUP_W = 7.5 + GAP + 13.3
+LEFT_MARGIN = (BOARD_W - GROUP_W) / 2
+TOP_Y = 11.0
+U1_X, U1_Y = BOARD_X0 + LEFT_MARGIN + 7.5 / 2, BOARD_Y0 + TOP_Y + 15.4 / 2
+U2_X, U2_Y = BOARD_X0 + LEFT_MARGIN + 7.5 + GAP + 13.3 / 2, BOARD_Y0 + TOP_Y + 28.2 / 2
+
+# C1/C2: 0.1uF decoupling caps, placed close to each IC's power pins.
+C1_X, C1_Y = U1_X, U1_Y + 15.4 / 2 + 6.0
+C2_X, C2_Y = U2_X, U2_Y + 28.2 / 2 + 6.0
 
 j1 = load_footprint("supercart:C64_EDGE_CONNECTOR_44", "J1", "C64_EDGE_CONNECTOR_44", J1_X, J1_Y)
-u1 = load_footprint("Package_SO:SOIC-24W_7.5x15.4mm_P1.27mm", "U1", "ATF22V10C_SUPERCART", U1_X, U1_Y, 90)
-u2 = load_footprint("Package_SO:SOP-44_13.3x28.2mm_P1.27mm", "U2", "AM29F080B_SO44", U2_X, U2_Y, 90)
-board.footprints = [j1, u1, u2]
+u1 = load_footprint("Package_SO:SOIC-24W_7.5x15.4mm_P1.27mm", "U1", "ATF22V10C_SUPERCART", U1_X, U1_Y)
+u2 = load_footprint("Package_SO:SOP-44_13.3x28.2mm_P1.27mm", "U2", "AM29F080B_SO44", U2_X, U2_Y)
+# KiCad's own library ships this exact footprint's 2D pads/silkscreen (used
+# above -- correct, verified against the real datasheet) but never shipped a
+# matching 3D model for it (checked: no SOP-44_13.3x28.2mm_P1.27mm.step
+# exists anywhere in the install). Substituting the PSOP-44 model purely for
+# a nicer 3D preview, per user choice 2026-08-21 -- cosmetic only, doesn't
+# touch pads/copper/Gerbers. Its native body (16.9 x 27.17mm) is scaled down
+# to approximate our real body (13.3 x 28.2mm); still an approximation, not
+# a real AM29F080B model.
+if u2.models:
+    u2.models[0].path = "${KICAD10_3DMODEL_DIR}/Package_SO.3dshapes/PSOP-44_16.9x27.17mm_P1.27mm.step"
+    u2.models[0].scale.X = round(13.3 / 16.9, 3)
+    u2.models[0].scale.Y = round(28.2 / 27.17, 3)
+c1 = load_footprint("Capacitor_SMD:C_0805_2012Metric", "C1", "0.1uF", C1_X, C1_Y)
+c2 = load_footprint("Capacitor_SMD:C_0805_2012Metric", "C2", "0.1uF", C2_X, C2_Y)
 
-# Board outline (Edge.Cuts rectangle)
-corners = [
-    (BOARD_X0, BOARD_Y0), (BOARD_X0 + BOARD_W, BOARD_Y0),
-    (BOARD_X0 + BOARD_W, BOARD_Y0 + BOARD_L), (BOARD_X0, BOARD_Y0 + BOARD_L),
-]
-for i in range(4):
-    x1, y1 = corners[i]
-    x2, y2 = corners[(i + 1) % 4]
-    board.graphicItems.append(GrLine(
-        start=Position(x1, y1), end=Position(x2, y2), layer="Edge.Cuts",
-        width=0.15, tstamp=mkuuid(),
-    ))
+# Mounting holes: purely mechanical (no copper, no net), top corners only --
+# the connector occupies the bottom edge. Position not verified against any
+# specific shell; a reasonable prototype default, not a fit-checked spec.
+mh1 = load_footprint("MountingHole:MountingHole_3.2mm_M3", "MH1", "MountingHole_3.2mm_M3", 6.0, 6.0)
+mh2 = load_footprint("MountingHole:MountingHole_3.2mm_M3", "MH2", "MountingHole_3.2mm_M3", BOARD_W - 6.0, 6.0)
 
+board.footprints = [j1, u1, u2, c1, c2, mh1, mh2]
+
+# Board outline: exact shape traced from hardware/TestBoard/EpyxFastLoad.kicad_pcb
+# (real board, per user request 2026-08-21) -- NOT rounded corners (an earlier
+# revision of this script guessed that from a mirrored screenshot and got it
+# wrong). The real shape, computed from that file's actual Edge.Cuts geometry
+# (top-level board outline + the EXPANSIO_SQ connector footprint's own
+# Edge.Cuts contribution, which extends the board further down to the fingers
+# -- easy to miss by only bounding-boxing the top-level outline, which is
+# what gave a wrong 37.9mm height estimate before this was traced properly):
+#   - Sharp (unrounded) top corners
+#   - Two small semicircular notches (1mm radius) inward on each side edge --
+#     purpose on the original board not confirmed (grip cutout? shell
+#     alignment tab?), replicated here at proportionally similar positions
+#   - 45-degree chamfered bottom corners (0.5mm) right at the connector,
+#     bottom edge inset 0.5mm on each side -- this part IS functionally
+#     meaningful (keys the connector's insertion orientation)
+def rounded_notch_outline(x0, y0, x1, y1, notch_ys, notch_r=1.0, chamfer=0.5):
+    items = []
+    def line(p1, p2):
+        items.append(GrLine(start=Position(*p1), end=Position(*p2), layer="Edge.Cuts",
+                             width=0.15, tstamp=mkuuid()))
+    def notch_arc(x_edge, ny, inward_x):
+        # semicircle bulging from the edge at x_edge toward inward_x, centered on ny
+        items.append(GrArc(
+            start=Position(x_edge, ny - notch_r), mid=Position(inward_x, ny),
+            end=Position(x_edge, ny + notch_r), layer="Edge.Cuts", width=0.15, tstamp=mkuuid(),
+        ))
+
+    line((x0, y0), (x1, y0))  # top, sharp corners
+
+    # right edge: straight segments broken up by inward notches, ending in
+    # the bottom-right 45-degree chamfer
+    y = y0
+    for ny in notch_ys:
+        line((x1, y), (x1, ny - notch_r))
+        notch_arc(x1, ny, x1 - notch_r)
+        y = ny + notch_r
+    line((x1, y), (x1, y1 - chamfer))
+    line((x1, y1 - chamfer), (x1 - chamfer, y1))       # bottom-right chamfer
+
+    line((x1 - chamfer, y1), (x0 + chamfer, y1))       # bottom edge
+
+    line((x0 + chamfer, y1), (x0, y1 - chamfer))       # bottom-left chamfer
+    y = y1 - chamfer
+    for ny in reversed(notch_ys):
+        line((x0, y), (x0, ny + notch_r))
+        notch_arc(x0, ny, x0 + notch_r)
+        y = ny - notch_r
+    line((x0, y), (x0, y0))
+
+    return items
+
+
+x0, y0, x1, y1 = BOARD_X0, BOARD_Y0, BOARD_X0 + BOARD_W, BOARD_Y0 + BOARD_L
+# reference notches sit at ~10.2% and ~59.9% of its 48.9mm total height
+NOTCH_YS = [round(BOARD_L * 0.102, 1), round(BOARD_L * 0.599, 1)]
+board.graphicItems.extend(rounded_notch_outline(x0, y0, x1, y1, NOTCH_YS))
+
+# Silkscreen title block (F.SilkS, visible on the assembled board). Centered
+# between the two mounting holes so it doesn't overlap either one.
 board.graphicItems.append(GrText(
-    text="SUPER CARTRIDGE rev 0.1 - PLACEMENT NOT FINAL - connector F.Cu/B.Cu face assignment NOT verified vs a real cartridge, see project notes",
-    position=Position(BOARD_X0 + 2, BOARD_Y0 + 5, 0), layer="Cmts.User", tstamp=mkuuid(),
+    text="SUPER CARTRIDGE", position=Position(BOARD_W / 2, BOARD_Y0 + 3.5, 0),
+    layer="F.SilkS", tstamp=mkuuid(),
+))
+board.graphicItems.append(GrText(
+    text="ATF22V10C + AM29F080B  rev 0.1",
+    position=Position(BOARD_W / 2, BOARD_Y0 + 6.5, 0), layer="F.SilkS", tstamp=mkuuid(),
+))
+
+# Documentation-only note (Cmts.User layer, not silkscreen -- doesn't appear
+# on the physical board). Split into short lines at a small font size so it
+# stays legible/on-board now that the board is only 58mm wide -- a single
+# long line at default text size ran off both edges.
+NOTE_FONT = Effects(font=Font(height=1.0, width=1.0))
+board.graphicItems.append(GrText(
+    text="PLACEMENT NOT FINAL - not yet routed.",
+    position=Position(BOARD_X0 + 2, BOARD_Y0 + BOARD_L - 15, 0), layer="Cmts.User",
+    effects=NOTE_FONT, tstamp=mkuuid(),
+))
+board.graphicItems.append(GrText(
+    text="J1 F.Cu/B.Cu face assignment NOT",
+    position=Position(BOARD_X0 + 2, BOARD_Y0 + BOARD_L - 12.5, 0), layer="Cmts.User",
+    effects=NOTE_FONT, tstamp=mkuuid(),
+))
+board.graphicItems.append(GrText(
+    text="verified vs a real cartridge.",
+    position=Position(BOARD_X0 + 2, BOARD_Y0 + BOARD_L - 10, 0), layer="Cmts.User",
+    effects=NOTE_FONT, tstamp=mkuuid(),
 ))
 
 out_path = f"{PROJECT_DIR}/supercart.kicad_pcb"

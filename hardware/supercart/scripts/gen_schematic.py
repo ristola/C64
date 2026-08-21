@@ -70,12 +70,27 @@ def insert_embedded_fonts(text):
 lib = SymbolLib().from_file("/Users/rts/Development/C64/hardware/supercart/supercart.kicad_sym")
 lib_syms = {s.entryName: s for s in lib.symbols}
 
+# C1/C2: 0.1uF decoupling capacitors near U1/U2 -- standard practice for any
+# digital IC, not previously in the design. Reuse KiCad's own real "Device:C"
+# symbol rather than hand-building one, same principle as the footprints.
+device_lib = SymbolLib().from_file("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols/Device.kicad_sym")
+lib_syms["C"] = [s for s in device_lib.symbols if s.entryName == "C"][0]
+NICKNAMES = {"C": "Device"}  # everything else defaults to "supercart"
+
 
 def symbol_pins(entry_name):
-    """Pins live on the nested '<name>_1_1' unit, not the parent symbol --
-    KiCad requires that nesting even for single-unit parts (see gen_schematic.py)."""
+    """Pins live on a nested '<name>_N_1' unit, not the parent symbol -- KiCad
+    requires that nesting even for single-unit parts (see gen_symbols.py). Real
+    KiCad library parts (e.g. Device:C) can carry a unitId=0 "common to all
+    units" placeholder with NO pins ahead of the real unitId=1 -- must match on
+    unitId, not just take units[0], or the pins list comes back empty."""
     s = lib_syms[entry_name]
-    return s.units[0].pins if s.units else s.pins
+    if not s.units:
+        return s.pins
+    for u in s.units:
+        if u.unitId == 1:
+            return u.pins
+    return s.units[0].pins
 
 
 def geometry(entry_name):
@@ -102,14 +117,14 @@ schematic.sheetInstances = [HierarchicalSheetInstance(instancePath="/", page="1"
 # --- embed library symbol copies with the project-nickname-qualified lib id ---
 for entry_name, s in lib_syms.items():
     s2 = copy.deepcopy(s)
-    s2.libraryNickname = LIB_NICK
+    s2.libraryNickname = NICKNAMES.get(entry_name, LIB_NICK)
     s2.entryName = entry_name
     schematic.libSymbols.append(s2)
 
 
 def place_symbol(entry_name, ref, x, y, extra_props=None):
     inst = SchematicSymbol(libName=None)
-    inst.libraryNickname = LIB_NICK
+    inst.libraryNickname = NICKNAMES.get(entry_name, LIB_NICK)
     inst.entryName = entry_name
     inst.position = Position(x, y, 0)
     inst.uuid = mkuuid()
@@ -148,12 +163,24 @@ X_PF = X_J1 - 25.4
 pf_vcc = place_symbol("PWR_FLAG", "#FLG1", X_PF, Y0 - 12.7)
 pf_gnd = place_symbol("PWR_FLAG", "#FLG2", X_PF, Y0 + 12.7)
 
+# C1/C2: decoupling caps, drawn near their respective ICs on the diagram.
+# Offsets kept as multiples of 1.27mm so pins land on the connection grid.
+X_C1, Y_C1 = X_U1 - 20.32, Y0 - 30.48
+X_C2, Y_C2 = X_U2 - 20.32, Y0 - 30.48
+c1 = place_symbol("C", "C1", X_C1, Y_C1)
+c2 = place_symbol("C", "C2", X_C2, Y_C2)
+for c in (c1, c2):
+    c.properties[1].value = "0.1uF"  # Value
+    c.properties[2].value = "Capacitor_SMD:C_0805_2012Metric"  # Footprint
+
 geo = {
     "J1": (X_J1, Y0) + geometry("C64_EDGE_CONNECTOR_44"),
     "U1": (X_U1, Y0) + geometry("ATF22V10C_SUPERCART"),
     "U2": (X_U2, Y0) + geometry("AM29F080B_SO44"),
     "#FLG1": (X_PF, Y0 - 12.7) + geometry("PWR_FLAG"),
     "#FLG2": (X_PF, Y0 + 12.7) + geometry("PWR_FLAG"),
+    "C1": (X_C1, Y_C1) + geometry("C"),
+    "C2": (X_C2, Y_C2) + geometry("C"),
 }
 
 
@@ -167,10 +194,12 @@ def add_stub_and_label(ref, number, label_text, is_tbd=False):
     x, y, angle, pin_name = pin_tip(ref, number)
     # angle 0 = pin tip is on the LEFT of its body (stub continues further left);
     # angle 180 = tip is on the RIGHT (stub continues further right). Verified
-    # against a real KiCad-authored symbol; see gen_schematic.py's note.
+    # against a real KiCad-authored symbol; see gen_schematic.py's note. Same
+    # logic applies vertically for angle 90/270 (e.g. Device:C's pins).
     dx = -1.0 if angle == 0 else (1.0 if angle == 180 else 0.0)
+    dy = -1.0 if angle == 270 else (1.0 if angle == 90 else 0.0)
     far_x = x + dx * PITCH
-    far_y = y
+    far_y = y + dy * PITCH
     schematic.graphicalItems.append(Connection(
         type="wire", points=[Position(x, y), Position(far_x, far_y)], uuid=mkuuid()
     ))
@@ -191,9 +220,13 @@ def add_noconnect(ref, number):
 # TBD_ nets are exactly the signals the user chose to label-but-not-decide.
 # ---------------------------------------------------------------------------
 nets = {
-    # power
-    "VCC": [("J1", "2"), ("U1", "24"), ("U2", "44"), ("U2", "23"), ("#FLG1", "1")],
-    "GND": [("J1", "1"), ("J1", "22"), ("J1", "Z"), ("U1", "12"), ("U2", "21"), ("U2", "22"), ("#FLG2", "1")],
+    # power (C1/C2: 0.1uF decoupling caps across VCC/GND at U1/U2)
+    # Pins 3 and A: c64-wiki documents both as blank/undefined, but a real,
+    # independently-found board (hardware/TestBoard/EpyxFastLoad.kicad_pcb)
+    # ties pin 3 to +5V and pin A to GND rather than leaving them floating --
+    # adopted here on that real precedent, per user choice 2026-08-21.
+    "VCC": [("J1", "2"), ("J1", "3"), ("U1", "24"), ("U2", "44"), ("U2", "23"), ("#FLG1", "1"), ("C1", "1"), ("C2", "1")],
+    "GND": [("J1", "1"), ("J1", "22"), ("J1", "A"), ("J1", "Z"), ("U1", "12"), ("U2", "21"), ("U2", "22"), ("#FLG2", "1"), ("C1", "2"), ("C2", "2")],
     # C64 bus control -> GAL
     "PHI2": [("J1", "E"), ("U1", "1")],
     "IO1_N": [("J1", "7"), ("U1", "10")],
@@ -249,7 +282,6 @@ nets = {
 # for and not implemented anywhere in SUPER_CART_R01.PLD or the roadmap docs)
 no_connects = [
     ("U2", "1"), ("U2", "11"), ("U2", "12"), ("U2", "31"), ("U2", "32"), ("U2", "33"), ("U2", "34"),
-    ("J1", "3"), ("J1", "A"),
     ("J1", "4"), ("J1", "6"), ("J1", "10"), ("J1", "12"), ("J1", "13"), ("J1", "D"),
     # A13-A15: real C64 address lines this design doesn't need directly -- the
     # flash's A13-A19 come from the GAL's BANK0-6 outputs instead (see PLD comments)
