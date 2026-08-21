@@ -1,8 +1,8 @@
 # SHACKMATE Expansion Platform — Hardware Design
 
-**Status: decided direction, not yet implemented.** This document describes a from-scratch custom cartridge PCB (built around an AM29F040B flash chip) that **supersedes** the EasyFlash-format build described in `ARCHITECTURE.md` as the shipping target. The existing EasyFlash `.crt` work remains valuable as proven technique (fixed-slot jump tables, cross-bank calling, the BASIC-extension hooks) — it just isn't the same physical cartridge going forward.
+**Status: decided direction, in progress.** This document describes a from-scratch custom cartridge PCB (built around an AM29F080B flash chip) that **supersedes** the EasyFlash-format build described in `ARCHITECTURE.md` as the shipping target. The existing EasyFlash `.crt` work remains valuable as proven technique (fixed-slot jump tables, cross-bank calling, the BASIC-extension hooks) — it just isn't the same physical cartridge going forward.
 
-Decided 2026-07-31.
+Decided 2026-07-31. **Superseded in part on 2026-08-10** when `EEPLD/SUPER_CART_R01.PLD` (the actual compiled GAL source, real project ground truth) turned out to use a different memory-map and banking approach than the one originally planned below — see "GAL-based redesign (2026-08-10)" note inside each affected section. KiCad schematic capture for this board lives in `hardware/supercart/` (see that folder's own files for verified chip pinouts).
 
 ## Why a platform, not just a cartridge
 
@@ -30,9 +30,11 @@ Before any Phase 1 hardware exists, an already-owned board can validate the *sof
 
 ## Memory map
 
-### IO1 (`$DE00`-`$DEFF`) — not used by this project
+### IO1 (`$DE00`-`$DEFF`) — GAL-based redesign (2026-08-10): now used by this project
 
-Reserved for *external devices*: Ultimate SwiftLink, Turbo232, RR-Net, and any other existing software that expects standard I/O-1 hardware. This platform deliberately avoids IO1 entirely so all of that existing software keeps working unmodified. (Note: this is also where EasyFlash's own `$DE00`/`$DE02` registers live — see "Relationship to the EasyFlash build" below.)
+**Superseded.** This section originally said IO1 was off-limits, reserved for external devices (Ultimate SwiftLink, Turbo232, RR-Net). `SUPER_CART_R01.PLD` — the real, compiled GAL source and current ground truth — instead reads `/IO1` directly on a dedicated ATF22V10C pin (`PIN 10 = IO1_N`), with the bank register living in the `$DE00` area via `/IO1`. This was not a deliberate reversal of the design rule below, it's what the actual hardware ended up doing; flagged here rather than silently overwritten so the original rationale (below) isn't lost.
+
+Original rationale, now void unless this gets revisited: reserve IO1 for *external devices* — Ultimate SwiftLink, Turbo232, RR-Net, and any other existing software that expects standard I/O-1 hardware — so that software keeps working unmodified. (This is also where EasyFlash's own `$DE00`/`$DE02` registers live — see "Relationship to the EasyFlash build" below.) If IO1 use is truly locked in going forward, compatibility with SwiftLink/Turbo232/RR-Net-alike hardware needs to be re-examined.
 
 ### IO2 (`$DF00`-`$DFFF`) — belongs to this cartridge
 
@@ -107,14 +109,17 @@ Usage sketch: `SYS API_INIT`, `SYS API_NETCONNECT`, `SYS API_BANK`, etc. Each en
 
 ## Phase 1 hardware (first real PCB)
 
-Intentionally minimal:
+**GAL-based redesign (2026-08-10):** `SUPER_CART_R01.PLD` replaces the originally-planned discrete 74HCT273/574 + 74HCT139/138 pair with a single ATF22V10C GAL doing bank/control decode. Current BOM:
 
-- 1× **AM29F040B** (512KB flash)
-- 1× **74HCT273** or **74HCT574** (bank/mode register)
-- 1× **74HCT139** or **74HCT138** (address decoding)
+- 1× **AM29F080B** (1MB flash, 44-pin SO — the "Final" chip from the PLD's own header comment; supersedes the AM29F040B prototype mentioned in earlier revisions of this doc)
+- 1× **ATF22V10C** (24-pin SOIC/PLCC GAL, `U1` in `SUPER_CART_R01.PLD`) — combined bank register + control decode, replacing the 74HCT273/574 + 74HCT139/138 pair below
+- ~~74HCT273 / 74HCT574 (bank/mode register)~~ — superseded by the GAL
+- ~~74HCT139 / 74HCT138 (address decoding)~~ — superseded by the GAL
 - DIP switches / jumpers for development
 - Expansion header for future add-ons
 - All components socketed (not soldered), so parts can be swapped during bring-up
+
+KiCad schematic capture (verified pinouts for both ICs plus the C64 44-pin edge connector) lives in `hardware/supercart/`.
 
 ## Boot architecture
 
@@ -122,16 +127,29 @@ The AM29F040B itself has no concept of Ultimax/16K/8K mode — that's purely a f
 
 **Verified fact** (from `cartconv`'s own report on the built EasyFlash `.crt`): `exrom: 1 game: 0` = Ultimax. In this project's convention, "asserted" = driven low (`0`); so **Ultimax = `EXROM` deasserted (high/`1`), `GAME` asserted (low/`0`)**. Cross-check this against `EasyFlash-ProgRef.pdf`/`EasyFlash-AppSupport.pdf` before finalizing a schematic — those are the actual EasyFlash reference docs, not just this project's own reverse-engineering.
 
-### Latch bit assignment (74HCT273/574, Q0-Q7)
+### GAL bank/control assignment (ATF22V10C, `SUPER_CART_R01.PLD` rev 0.1) — supersedes the 74HCT273/574 Q0-Q7 scheme below
+
+The section below (Q0-Q7 latch bits, `GAME`/`EXROM` auto-Ultimax trick) described the *originally planned* discrete-logic board and is kept for its still-relevant reasoning, but the real PLD does not implement it. Verified pin map, from the PLD's own comments (24-pin SOIC, pins 12/24 = GND/VCC):
+
+| PLD pin(s) | Signal | Wiring |
+|---|---|---|
+| 14-20 (`BANK0`-`BANK6`) | 7 bits → flash `A13`-`A19` **directly**, one-to-one | 128 banks × 8KB = 1MB, matching the AM29F080B. **This is 8KB banks, not the originally-planned 16KB banks** — no ROML/ROMH-derived A13 strobe is used; flash `A[12:0]` connects straight to the C64's own `A[12:0]` instead (see `hardware/supercart/` schematic, net map `A0`-`A12`). |
+| 21-23 (`CTRL0`-`CTRL2`) | Reserved, undefined | Rev 0.1 forces these to `0` as a first bring-up test (per the PLD's own "REV 0.1 TEST LOGIC" comment) — **no bank switching or mode control is implemented yet.** `CTRL1` is commented "Flash write control / safety" as a *candidate*, not a decision. |
+| 1 (`PHI2`), 10 (`IO1_N`), 11 (`RW`), 13 (`RESET_N`) | C64 bus inputs | Standard control inputs to the GAL's decode logic |
+| 2-9 (`D0`-`D7`) | C64 data bus | Read by the GAL, presumably for a future unlock/write-control command decode (not yet implemented — see `CTRL1` above) |
+
+**Open/not yet implemented in the GAL:** there is no `GAME`/`EXROM` output on the ATF22V10C at all in rev 0.1 — the original "auto-forces Ultimax on power-up via the latch's `MR` default state" trick (below) assumed a 74HCT273 that no longer exists in this design. Cartridge-mode control (Ultimax/8K/16K) needs to be redesigned around the GAL — either as future `CTRL0`-`CTRL2` outputs, or some other mechanism. Until then, GAME/EXROM/ROML/ROMH on the cartridge edge connector are unconnected in the schematic (labeled `TBD_GAME_N`, `TBD_EXROM_N`, `TBD_ROML_N`, `TBD_ROMH_N`).
+
+### Originally-planned latch bit assignment (74HCT273/574, Q0-Q7) — NOT what the real PLD implements; kept for the Ultimax-on-power-up reasoning
 
 | Bits | Signal | Wiring |
 |---|---|---|
-| Q0-Q4 | `BANK[4:0]` | 5 bits → 32 banks × 16KB (8K ROML + 8K ROMH per bank) = 512KB, exactly matching the AM29F040B |
+| Q0-Q4 | `BANK[4:0]` | 5 bits → 32 banks × 16KB (8K ROML + 8K ROMH per bank) = 512KB, matching the AM29F040B prototype size |
 | Q5 | `GAME` | Direct (non-inverted) drive to the cartridge port pin |
 | Q6 | `EXROM` | **Inverted** before the cartridge port pin |
 | Q7 | spare/reserved | Candidate use: flash write-enable gate (require this bit set + the vendor unlock sequence before any program/erase cycle reaches the chip) |
 
-A 74HCT273 clears all outputs to `0` on its `MR` (master reset) pin, which ties to the cartridge's `/RESET` line. With the wiring above, that power-on default gives `Q5=0 → GAME=0` (asserted) and `Q6=0 → EXROM=NOT(0)=1` (deasserted) — **Ultimax, automatically, with no code having run yet.** That's the whole trick: the *default* state of the hardware has to already be correct, because nothing can execute before the CPU's first instruction fetch establishes some memory map.
+A 74HCT273 clears all outputs to `0` on its `MR` (master reset) pin, which ties to the cartridge's `/RESET` line. With the wiring above, that power-on default gives `Q5=0 → GAME=0` (asserted) and `Q6=0 → EXROM=NOT(0)=1` (deasserted) — **Ultimax, automatically, with no code having run yet.** That's the whole trick: the *default* state of the hardware has to already be correct, because nothing can execute before the CPU's first instruction fetch establishes some memory map. **This reasoning still needs to be reproduced somehow in the GAL-based design** — it just isn't, yet.
 
 Checked against all four real GAME/EXROM modes:
 
@@ -144,11 +162,20 @@ Checked against all four real GAME/EXROM modes:
 
 ### Flash addressing
 
+**Current (GAL-based, matches `SUPER_CART_R01.PLD` and `hardware/supercart/`):**
+
+- `Flash A[19:13] = BANK[6:0]` — from the GAL's `BANK0`-`BANK6` outputs directly, **8KB granularity**
+- `Flash A[12:0] = C64 A[12:0]` straight through (no ROML/ROMH-derived strobe)
+
+This is a real change from the originally-planned scheme below, not a compatible reproduction of it — 8KB banks are half the size of the 16KB banks `build_cart.sh` currently produces, so **the existing flash image format does *not* carry over unchanged**; the ROM build/packaging step needs rework to match, in addition to the bank-register address and bootloader mode-switching sequence.
+
+**Originally planned (NOT current):**
+
 - `Flash A[18:14] = BANK[4:0]` (from Q0-Q4)
 - `Flash A13` = ROMH-select, driven from the cartridge port's own `/ROML`/`/ROMH` strobes (the C64 already decodes `$8000-$9FFF` vs `$E000-$FFFF`/`$A000-$BFFF` into those signals — no need to re-derive it from raw address lines)
 - `Flash A[12:0] = C64 A[12:0]` straight through
 
-This exactly reproduces the 16KB-per-bank layout `build_cart.sh` *already* produces today (8K ROML then 8K ROMH per bank, real ROMH content only in bank 0) — the existing flash image format carries over to the new hardware unchanged. Only the bank-register address and the bootloader's mode-switching sequence need to change.
+This would have exactly reproduced the 16KB-per-bank layout `build_cart.sh` already produces today (8K ROML then 8K ROMH per bank, real ROMH content only in bank 0).
 
 ### Why `/RESET` stays tied to the latch's clear pin
 
@@ -176,7 +203,11 @@ The currently-working cartridge (`ARCHITECTURE.md`) targets real EasyFlash hardw
 
 ## Open items
 
-- Exact `74HCT139`/`138` address-decoder wiring (deriving flash chip-enable, the A13 ROML/ROMH select, and the `$DFxx` register-select strobes from `/ROML`, `/ROMH`, `/IO2`).
+- GAL logic for flash `/CE`, `/OE`, `/WE` (currently unconnected/`TBD_FLASH_*` in the schematic).
+- GAL logic (or other mechanism) for `GAME`/`EXROM`/`/ROML`/`/ROMH` — cartridge-mode control has no implementation at all in the GAL yet; the original 74HCT273-based "auto-Ultimax-on-power-up" trick doesn't apply as-is.
+- `CTRL0`-`CTRL2` function (rev 0.1 forces them to `0`; `CTRL1` is only a *candidate* for flash write-safety).
+- Since banks are now 8KB (not 16KB), `build_cart.sh`'s ROM image packaging needs rework to match — it currently produces 16KB (8K ROML + 8K ROMH) per bank.
+- $DFxx register-select strobe derivation from `/IO2` — not used by the PLD at all yet (only `/IO1` is read, per the PLD's own header comment); the whole `$DF00`-`$DFFF` register map above is still aspirational, not wired to anything.
 - Flash/EEPROM config-block layout the bootloader reads.
-- Which inverting-gate part to use for the `EXROM` bit.
 - Whether/how the existing 13-bank EasyFlash content maps onto the new Boot/BASIC/Networking/Utilities/Diagnostics/Games/DevTools bank scheme.
+- Board mechanical dimensions (AM29F080B SO-44 footprint, C64 edge-connector goldfinger spec) — not yet verified, blocking PCB layout/autorouting/Gerbers in `hardware/supercart/`.

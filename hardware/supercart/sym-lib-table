@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "supercart")(type "KiCad")(uri "${KIPRJMOD}/supercart.kicad_sym")(options "")(descr "SUPER CARTRIDGE custom parts: ATF22V10C, AM29F080B, C64 edge connector"))
+)
