@@ -11,10 +11,20 @@ Epyx board's rectangular pads were adopted per user choice 2026-08-21 since
 it's the more recently and more thoroughly cross-verified of the two sources.)
 
 Two independent pads exist at each of the 22 X positions -- one on F.Cu (the
-"lettered" A-Z side) and one on B.Cu (the "numbered" 1-22 side) -- these are
+"numbered" 1-22 side) and one on B.Cu (the "lettered" A-Z side) -- these are
 DIFFERENT signals on the real connector, not two pads of the same net; see
-reference_supercart_pinouts.md. Which physical face is F.Cu vs B.Cu is NOT
-verified against a real cartridge yet -- flagged in the board notes.
+reference_supercart_pinouts.md.
+
+RESOLVED 2026-08-22 (was previously an open question, flagged in the module
+docstring as unverified): which physical face is F.Cu vs B.Cu, determined by
+directly inspecting EXPANSIO_SQ's own pad layer assignments in the same real
+EpyxFastLoad.kicad_pcb reference used for the geometry above. Both that
+board's J1 and this project's J1 are placed unmirrored with footprint-level
+layer F.Cu (confirmed by checking for a mirror flag on each -- neither has
+one; they differ only in in-plane rotation, 180 vs 0 degrees, which does not
+affect which copper layer a pad sits on). EXPANSIO_SQ's own pads 1-22 are on
+F.Cu and A-Z are on B.Cu -- this project's footprint previously had that
+backwards (1-22 on B.Cu, A-Z on F.Cu) and has been corrected to match.
 
 Requires: pip install kiutils.
 """
@@ -50,19 +60,20 @@ x0 = -((N - 1) / 2) * PITCH
 pads = []
 for i in range(N):
     x = x0 + i * PITCH
-    # B.Cu pad = "numbered" side (schematic pin numbers "1".."22"). Mask layer
-    # included (no soldermask over the goldfingers) but no paste -- these are
-    # bare plated contacts, never soldered.
+    # F.Cu pad = "numbered" side (schematic pin numbers "1".."22") -- verified
+    # against EXPANSIO_SQ, see module docstring. Mask layer included (no
+    # soldermask over the goldfingers) but no paste -- these are bare plated
+    # contacts, never soldered.
     pads.append(Pad(
         number=edge_left_num[i], type="smd", shape="rect",
         position=Position(x, 0, 0), size=Position(PAD_W, PAD_L),
-        layers=["B.Cu", "B.Mask"],
+        layers=["F.Cu", "F.Mask"],
     ))
-    # F.Cu pad = "lettered" side (schematic pin numbers "A".."Z", skipping G/I/O/Q)
+    # B.Cu pad = "lettered" side (schematic pin numbers "A".."Z", skipping G/I/O/Q)
     pads.append(Pad(
         number=edge_right_num[i], type="smd", shape="rect",
         position=Position(x, 0, 0), size=Position(PAD_W, PAD_L),
-        layers=["F.Cu", "F.Mask"],
+        layers=["B.Cu", "B.Mask"],
     ))
 fp.pads = pads
 

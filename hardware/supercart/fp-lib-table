@@ -3,5 +3,6 @@
   (lib (name "supercart")(type "KiCad")(uri "${KIPRJMOD}/supercart.pretty")(options "")(descr "SUPER CARTRIDGE custom footprints: C64 edge connector"))
   (lib (name "Package_SO")(type "KiCad")(uri "${KICAD10_FOOTPRINT_DIR}/Package_SO.pretty")(options "")(descr "Small Outline Integrated Circuits (SOIC, SSOP, xSOP, xSO)"))
   (lib (name "Capacitor_SMD")(type "KiCad")(uri "${KICAD10_FOOTPRINT_DIR}/Capacitor_SMD.pretty")(options "")(descr "SMD capacitors"))
+  (lib (name "Resistor_SMD")(type "KiCad")(uri "${KICAD10_FOOTPRINT_DIR}/Resistor_SMD.pretty")(options "")(descr "SMD resistors"))
   (lib (name "MountingHole")(type "KiCad")(uri "${KICAD10_FOOTPRINT_DIR}/MountingHole.pretty")(options "")(descr "Mounting holes"))
 )

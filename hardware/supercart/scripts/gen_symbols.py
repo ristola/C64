@@ -135,9 +135,9 @@ atf_left = [
 ]
 atf_right = [
     (24, "VCC", "power_in"),
-    (23, "CTRL2", "output"),
-    (22, "CTRL1", "output"),
-    (21, "CTRL0", "output"),
+    (23, "CTRL2", "output"),  # spare/unused; WRITE_ARM stays internal to the GAL
+    (22, "FLASH_WE_N", "output"),  # was CTRL1, renamed 2026-08-21 (SUPER_CART_R01.PLD)
+    (21, "FLASH_OE_N", "output"),  # was CTRL0, renamed 2026-08-21 (SUPER_CART_R01.PLD)
     (20, "BANK6", "output"),
     (19, "BANK5", "output"),
     (18, "BANK4", "output"),
@@ -262,8 +262,8 @@ edge_right = [
 
 sym_atf = make_symbol(
     "ATF22V10C_SUPERCART", atf_left, atf_right, "U",
-    "ATF22V10C GAL, SUPER CARTRIDGE bank/control decoder (SUPER_CART_R01.PLD rev 0.1)",
-    "https://ww1.microchip.com/downloads/en/DeviceDoc/doc0735.pdf",
+    "ATF22V10C GAL, SUPER CARTRIDGE bank/control decoder (SUPER_CART_R01.PLD rev 0.2)",
+    "ATF22V10C_datasheet_doc0735.pdf (Microchip doc0735)",
 )
 sym_flash = make_symbol(
     "AM29F080B_SO44", flash_left, flash_right, "U",

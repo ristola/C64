@@ -92,8 +92,10 @@ board.setup = SetupData(packToMaskClearance=0.05, solderMaskMinWidth=0.1)
 nets = {
     # Pins 3/A: tied to +5V/GND per a real precedent found in
     # hardware/TestBoard/EpyxFastLoad.kicad_pcb -- see gen_schematic.py's note.
-    "VCC": [("J1", "2"), ("J1", "3"), ("U1", "24"), ("U2", "44"), ("U2", "23"), ("C1", "1"), ("C2", "1")],
-    "GND": [("J1", "1"), ("J1", "22"), ("J1", "A"), ("J1", "Z"), ("U1", "12"), ("U2", "21"), ("U2", "22"), ("C1", "2"), ("C2", "2")],
+    # J1 GAME_N/EXROM_N join VCC/GND too -- static 8K cartridge mode, decided
+    # 2026-08-21, no Ultimax/mode-switching bootloader.
+    "VCC": [("J1", "2"), ("J1", "3"), ("J1", "8"), ("U1", "24"), ("U2", "44"), ("U2", "23"), ("C1", "1"), ("C2", "1"), ("R1", "1")],
+    "GND": [("J1", "1"), ("J1", "22"), ("J1", "9"), ("J1", "A"), ("J1", "Z"), ("U1", "12"), ("U2", "21"), ("U2", "22"), ("C1", "2"), ("C2", "2")],
     "PHI2": [("J1", "E"), ("U1", "1")],
     "IO1_N": [("J1", "7"), ("U1", "10")],
     "RW": [("J1", "5"), ("U1", "11")],
@@ -126,16 +128,13 @@ nets = {
     "BANK4": [("U1", "18"), ("U2", "37")],
     "BANK5": [("U1", "19"), ("U2", "36")],
     "BANK6": [("U1", "20"), ("U2", "35")],
-    "TBD_CTRL0": [("U1", "21")],
-    "TBD_CTRL1_FLASH_WRITE_SAFETY": [("U1", "22")],
-    "TBD_CTRL2": [("U1", "23")],
-    "TBD_FLASH_CE_N": [("U2", "43")],
-    "TBD_FLASH_OE_N": [("U2", "29")],
-    "TBD_FLASH_WE_N": [("U2", "30")],
+    # Flash control assignment decided 2026-08-21 (SUPER_CART_R01.PLD updated
+    # to match). /ROML drives Flash /CE directly, bypassing the GAL entirely.
+    "ROML_N": [("J1", "11"), ("U2", "43")],
+    "FLASH_OE_N": [("U1", "21"), ("U2", "29")],
+    "FLASH_WE_N": [("U1", "22"), ("U2", "30"), ("R1", "2")],  # + 10k pull-up to VCC (R1)
+    # still undefined in SUPER_CART_R01.PLD rev 0.2
     "TBD_FLASH_RYBY_N": [("U2", "28")],
-    "TBD_GAME_N": [("J1", "8")],
-    "TBD_EXROM_N": [("J1", "9")],
-    "TBD_ROML_N": [("J1", "11")],
     "TBD_ROMH_N": [("J1", "B")],
 }
 
@@ -161,8 +160,12 @@ FP_FILES = {
         f"{FOOTPRINT_DIR}/Package_SO.pretty/SOP-44_13.3x28.2mm_P1.27mm.kicad_mod",
     "supercart:C64_EDGE_CONNECTOR_44":
         f"{PROJECT_DIR}/supercart.pretty/C64_EDGE_CONNECTOR_44.kicad_mod",
+    "supercart:SOP-44_28.2x13.3mm_P1.27mm_HORIZ":
+        f"{PROJECT_DIR}/supercart.pretty/SOP-44_28.2x13.3mm_P1.27mm_HORIZ.kicad_mod",
     "Capacitor_SMD:C_0805_2012Metric":
         f"{FOOTPRINT_DIR}/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod",
+    "Resistor_SMD:R_0805_2012Metric":
+        f"{FOOTPRINT_DIR}/Resistor_SMD.pretty/R_0805_2012Metric.kicad_mod",
     "MountingHole:MountingHole_3.2mm_M3":
         f"{FOOTPRINT_DIR}/MountingHole.pretty/MountingHole_3.2mm_M3.kicad_mod",
 }
@@ -221,48 +224,82 @@ BOARD_X0, BOARD_Y0 = 0.0, 0.0  # top-left corner of the board outline
 J1_X = BOARD_X0 + BOARD_W / 2
 J1_Y = BOARD_Y0 + BOARD_L - 5.0
 
-# U1 (ATF22V10C, 7.5w x 15.4h) and U2 (AM29F080B, 13.3w x 28.2h), side by
-# side, top-aligned, centered as a group within the board width. Each uses
-# its OWN half-height for the Y offset so their top edges truly align (an
+# U1 (ATF22V10C, 7.5w x 15.4h, unrotated) and U2 (AM29F080B) side by side,
+# top-aligned, centered as a group within the board width. Each uses its OWN
+# half-height/width for the offset so their top edges truly align (an
 # earlier version of this script reused U1's half-height for both, which
 # left U2 mis-aligned -- harmless at the old, generous 75mm board length but
 # worth fixing now that height is tight).
+#
+# U2 rotation/footprint history (all 2026-08-21/22):
+#   -90 (horizontal, stock footprint): user set this in the GUI (and later I
+#     did too, twice), each time DID reproduce the rotated-roundrect-pad DRC
+#     violations. Initially misdiagnosed as a KiCad DRC false positive
+#     (checked only via a full-board render, which was too zoomed out to
+#     catch it). CORRECTED 2026-08-22 after measuring real pcbnew pad
+#     bounding boxes: it's a genuine 0.58mm pad-to-pad overlap, not a checker
+#     bug. Cause: the stock SOP-44 footprint's pads are 1.85mm long x 0.6mm
+#     wide, drawn with the long axis ACROSS the two rows and the narrow axis
+#     ALONG the 1.27mm pitch -- correct only when unrotated/180. Rotating the
+#     whole footprint 90 degrees swings the 1.85mm axis onto the same axis as
+#     the 1.27mm pitch, which cannot avoid overlapping neighboring pads.
+#   180 (flip, stock footprint): does NOT overlap (180 doesn't swap axes).
+#     Routed successfully on that state earlier tonight.
+#   0, custom transposed footprint (current): user wants horizontal placement
+#     despite the above, so rather than rotating the stock footprint, U2 now
+#     uses scripts/make_u2_horizontal_footprint.py's output -- a fresh
+#     footprint with every pad's position AND size transposed (X/Y swapped)
+#     from the real stock file, so the narrow 0.6mm pad dimension stays
+#     aligned with the (now horizontal) 1.27mm pitch. Needs 0 rotation here;
+#     the footprint is natively horizontal.
+U2_ROT = 0
+U2_W, U2_H = 28.2, 13.3
+
 GAP = 8.0
-GROUP_W = 7.5 + GAP + 13.3
+GROUP_W = 7.5 + GAP + U2_W
 LEFT_MARGIN = (BOARD_W - GROUP_W) / 2
 TOP_Y = 11.0
 U1_X, U1_Y = BOARD_X0 + LEFT_MARGIN + 7.5 / 2, BOARD_Y0 + TOP_Y + 15.4 / 2
-U2_X, U2_Y = BOARD_X0 + LEFT_MARGIN + 7.5 + GAP + 13.3 / 2, BOARD_Y0 + TOP_Y + 28.2 / 2
+U2_X, U2_Y = BOARD_X0 + LEFT_MARGIN + 7.5 + GAP + U2_W / 2, BOARD_Y0 + TOP_Y + U2_H / 2
 
 # C1/C2: 0.1uF decoupling caps, placed close to each IC's power pins.
 C1_X, C1_Y = U1_X, U1_Y + 15.4 / 2 + 6.0
-C2_X, C2_Y = U2_X, U2_Y + 28.2 / 2 + 6.0
+C2_X, C2_Y = U2_X, U2_Y + U2_H / 2 + 6.0
 
 j1 = load_footprint("supercart:C64_EDGE_CONNECTOR_44", "J1", "C64_EDGE_CONNECTOR_44", J1_X, J1_Y)
 u1 = load_footprint("Package_SO:SOIC-24W_7.5x15.4mm_P1.27mm", "U1", "ATF22V10C_SUPERCART", U1_X, U1_Y)
-u2 = load_footprint("Package_SO:SOP-44_13.3x28.2mm_P1.27mm", "U2", "AM29F080B_SO44", U2_X, U2_Y)
-# KiCad's own library ships this exact footprint's 2D pads/silkscreen (used
-# above -- correct, verified against the real datasheet) but never shipped a
-# matching 3D model for it (checked: no SOP-44_13.3x28.2mm_P1.27mm.step
-# exists anywhere in the install). Substituting the PSOP-44 model purely for
-# a nicer 3D preview, per user choice 2026-08-21 -- cosmetic only, doesn't
-# touch pads/copper/Gerbers. Its native body (16.9 x 27.17mm) is scaled down
-# to approximate our real body (13.3 x 28.2mm); still an approximation, not
-# a real AM29F080B model.
+# U2 uses the custom transposed-for-horizontal footprint (see history comment
+# above, and scripts/make_u2_horizontal_footprint.py) -- NOT the stock
+# Package_SO:SOP-44_13.3x28.2mm_P1.27mm, and NOT rotated.
+u2 = load_footprint("supercart:SOP-44_28.2x13.3mm_P1.27mm_HORIZ", "U2", "AM29F080B_SO44", U2_X, U2_Y, U2_ROT)
+# KiCad's own library never shipped a 3D model for this exact SOP-44 body
+# size at all (checked: no SOP-44_13.3x28.2mm_P1.27mm.step anywhere in the
+# install), so there's doubly no model for this custom-transposed variant.
+# Substituting the PSOP-44 model, rotated 90 to match our horizontal pad
+# layout, purely for a nicer 3D preview -- cosmetic only, doesn't touch
+# pads/copper/Gerbers. Its native body (16.9 x 27.17mm) is scaled down to
+# approximate our real (transposed) body (28.2 x 13.3mm); still an
+# approximation, not a real AM29F080B model.
 if u2.models:
     u2.models[0].path = "${KICAD10_3DMODEL_DIR}/Package_SO.3dshapes/PSOP-44_16.9x27.17mm_P1.27mm.step"
+    # Scale is applied in the model's own native (pre-rotation) frame, so
+    # these stay mapped to native X/Y exactly as in the unrotated case --
+    # rotate.Z below is what actually reorients native-Y (27.17, scaled to
+    # 28.2) onto the horizontal global X axis.
     u2.models[0].scale.X = round(13.3 / 16.9, 3)
     u2.models[0].scale.Y = round(28.2 / 27.17, 3)
+    u2.models[0].rotate.Z = 90
 c1 = load_footprint("Capacitor_SMD:C_0805_2012Metric", "C1", "0.1uF", C1_X, C1_Y)
 c2 = load_footprint("Capacitor_SMD:C_0805_2012Metric", "C2", "0.1uF", C2_X, C2_Y)
 
-# Mounting holes: purely mechanical (no copper, no net), top corners only --
-# the connector occupies the bottom edge. Position not verified against any
-# specific shell; a reasonable prototype default, not a fit-checked spec.
-mh1 = load_footprint("MountingHole:MountingHole_3.2mm_M3", "MH1", "MountingHole_3.2mm_M3", 6.0, 6.0)
-mh2 = load_footprint("MountingHole:MountingHole_3.2mm_M3", "MH2", "MountingHole_3.2mm_M3", BOARD_W - 6.0, 6.0)
+# R1: 10k pull-up, FLASH_WE_N to VCC, per user spec 2026-08-21
+R1_X, R1_Y = C2_X + 10.0, C2_Y
+r1 = load_footprint("Resistor_SMD:R_0805_2012Metric", "R1", "10k", R1_X, R1_Y)
 
-board.footprints = [j1, u1, u2, c1, c2, mh1, mh2]
+# No mounting holes -- removed 2026-08-22 per user's real layout (their
+# board doesn't have them). Previously MH1/MH2 sat at the top corners.
+
+board.footprints = [j1, u1, u2, c1, c2, r1]
 
 # Board outline: exact shape traced from hardware/TestBoard/EpyxFastLoad.kicad_pcb
 # (real board, per user request 2026-08-21) -- NOT rounded corners (an earlier
@@ -328,30 +365,31 @@ board.graphicItems.append(GrText(
     layer="F.SilkS", tstamp=mkuuid(),
 ))
 board.graphicItems.append(GrText(
-    text="ATF22V10C + AM29F080B  rev 0.1",
+    text="ATF22V10C + AM29F080B  rev 0.2",
     position=Position(BOARD_W / 2, BOARD_Y0 + 6.5, 0), layer="F.SilkS", tstamp=mkuuid(),
 ))
 
 # Documentation-only note (Cmts.User layer, not silkscreen -- doesn't appear
 # on the physical board). Split into short lines at a small font size so it
 # stays legible/on-board now that the board is only 58mm wide -- a single
-# long line at default text size ran off both edges.
+# long line at default text size ran off both edges. NOTE: this script only
+# ever produces the UNROUTED board -- routing is a separate step (see
+# export_dsn.py / import_ses.py) -- so don't claim a routing status here that
+# would go stale the moment that step runs (an earlier "not yet routed" line
+# did exactly that). Only note things that stay true regardless of routing.
 NOTE_FONT = Effects(font=Font(height=1.0, width=1.0))
-board.graphicItems.append(GrText(
-    text="PLACEMENT NOT FINAL - not yet routed.",
-    position=Position(BOARD_X0 + 2, BOARD_Y0 + BOARD_L - 15, 0), layer="Cmts.User",
-    effects=NOTE_FONT, tstamp=mkuuid(),
-))
-board.graphicItems.append(GrText(
-    text="J1 F.Cu/B.Cu face assignment NOT",
-    position=Position(BOARD_X0 + 2, BOARD_Y0 + BOARD_L - 12.5, 0), layer="Cmts.User",
-    effects=NOTE_FONT, tstamp=mkuuid(),
-))
-board.graphicItems.append(GrText(
-    text="verified vs a real cartridge.",
-    position=Position(BOARD_X0 + 2, BOARD_Y0 + BOARD_L - 10, 0), layer="Cmts.User",
-    effects=NOTE_FONT, tstamp=mkuuid(),
-))
+NOTE_LINES = [
+    "TBD_* nets: Flash RY/BY# and J1 /ROMH",
+    "not yet defined in PLD rev 0.2.",
+    "J1 F.Cu/B.Cu face assignment NOT",
+    "verified vs a real cartridge.",
+]
+for i, line in enumerate(NOTE_LINES):
+    board.graphicItems.append(GrText(
+        text=line,
+        position=Position(BOARD_X0 + 2, BOARD_Y0 + BOARD_L - 17 + i * 2.2, 0),
+        layer="Cmts.User", effects=NOTE_FONT, tstamp=mkuuid(),
+    ))
 
 out_path = f"{PROJECT_DIR}/supercart.kicad_pcb"
 board.to_file(out_path)

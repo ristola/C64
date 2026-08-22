@@ -7,7 +7,7 @@ logical schematic; a human can rearrange this freely later without touching
 connectivity.
 
 Genuine NC pins (per datasheet / c64-wiki) get an explicit no-connect flag.
-Pins whose function is not yet decided in SUPER_CART_R01.PLD rev 0.1 get a
+Pins whose function is still not decided in SUPER_CART_R01.PLD rev 0.2 get a
 TBD_-prefixed label instead of a real net name, per explicit user decision.
 """
 """Run after gen_symbols.py (needs supercart.kicad_sym to already exist).
@@ -71,11 +71,15 @@ lib = SymbolLib().from_file("/Users/rts/Development/C64/hardware/supercart/super
 lib_syms = {s.entryName: s for s in lib.symbols}
 
 # C1/C2: 0.1uF decoupling capacitors near U1/U2 -- standard practice for any
-# digital IC, not previously in the design. Reuse KiCad's own real "Device:C"
-# symbol rather than hand-building one, same principle as the footprints.
+# digital IC, not previously in the design. R1: 10k pull-up from FLASH_WE_N
+# to VCC per user spec 2026-08-21, so the flash defaults write-protected any
+# time the GAL isn't actively driving the pin low (e.g. power-up sequencing).
+# Reuse KiCad's own real "Device:C"/"Device:R" symbols rather than hand-
+# building them, same principle as the footprints.
 device_lib = SymbolLib().from_file("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols/Device.kicad_sym")
 lib_syms["C"] = [s for s in device_lib.symbols if s.entryName == "C"][0]
-NICKNAMES = {"C": "Device"}  # everything else defaults to "supercart"
+lib_syms["R"] = [s for s in device_lib.symbols if s.entryName == "R"][0]
+NICKNAMES = {"C": "Device", "R": "Device"}  # everything else defaults to "supercart"
 
 
 def symbol_pins(entry_name):
@@ -173,6 +177,12 @@ for c in (c1, c2):
     c.properties[1].value = "0.1uF"  # Value
     c.properties[2].value = "Capacitor_SMD:C_0805_2012Metric"  # Footprint
 
+# R1: 10k pull-up, FLASH_WE_N to VCC
+X_R1, Y_R1 = X_U2 + 20.32, Y0 - 30.48
+r1 = place_symbol("R", "R1", X_R1, Y_R1)
+r1.properties[1].value = "10k"
+r1.properties[2].value = "Resistor_SMD:R_0805_2012Metric"
+
 geo = {
     "J1": (X_J1, Y0) + geometry("C64_EDGE_CONNECTOR_44"),
     "U1": (X_U1, Y0) + geometry("ATF22V10C_SUPERCART"),
@@ -181,6 +191,7 @@ geo = {
     "#FLG2": (X_PF, Y0 + 12.7) + geometry("PWR_FLAG"),
     "C1": (X_C1, Y_C1) + geometry("C"),
     "C2": (X_C2, Y_C2) + geometry("C"),
+    "R1": (X_R1, Y_R1) + geometry("R"),
 }
 
 
@@ -225,8 +236,10 @@ nets = {
     # independently-found board (hardware/TestBoard/EpyxFastLoad.kicad_pcb)
     # ties pin 3 to +5V and pin A to GND rather than leaving them floating --
     # adopted here on that real precedent, per user choice 2026-08-21.
-    "VCC": [("J1", "2"), ("J1", "3"), ("U1", "24"), ("U2", "44"), ("U2", "23"), ("#FLG1", "1"), ("C1", "1"), ("C2", "1")],
-    "GND": [("J1", "1"), ("J1", "22"), ("J1", "A"), ("J1", "Z"), ("U1", "12"), ("U2", "21"), ("U2", "22"), ("#FLG2", "1"), ("C1", "2"), ("C2", "2")],
+    # J1 GAME_N/EXROM_N also join these two nets (see below) -- static 8K
+    # cartridge mode, decided 2026-08-21, no Ultimax/mode-switching bootloader.
+    "VCC": [("J1", "2"), ("J1", "3"), ("J1", "8"), ("U1", "24"), ("U2", "44"), ("U2", "23"), ("#FLG1", "1"), ("C1", "1"), ("C2", "1"), ("R1", "1")],
+    "GND": [("J1", "1"), ("J1", "22"), ("J1", "9"), ("J1", "A"), ("J1", "Z"), ("U1", "12"), ("U2", "21"), ("U2", "22"), ("#FLG2", "1"), ("C1", "2"), ("C2", "2")],
     # C64 bus control -> GAL
     "PHI2": [("J1", "E"), ("U1", "1")],
     "IO1_N": [("J1", "7"), ("U1", "10")],
@@ -264,23 +277,25 @@ nets = {
     "BANK4": [("U1", "18"), ("U2", "37")],
     "BANK5": [("U1", "19"), ("U2", "36")],
     "BANK6": [("U1", "20"), ("U2", "35")],
-    # --- TBD: undefined in SUPER_CART_R01.PLD rev 0.1, labeled per user's choice ---
-    "TBD_CTRL0": [("U1", "21")],
-    "TBD_CTRL1_FLASH_WRITE_SAFETY": [("U1", "22")],
-    "TBD_CTRL2": [("U1", "23")],
-    "TBD_FLASH_CE_N": [("U2", "43")],
-    "TBD_FLASH_OE_N": [("U2", "29")],
-    "TBD_FLASH_WE_N": [("U2", "30")],
+    # --- Flash control assignment, decided/implemented 2026-08-21
+    # (SUPER_CART_R01.PLD rev 0.2: FLASH_OE_N=!RW, FLASH_WE_N gated by
+    # WRITE_ARM+RW+PHI2). /ROML drives Flash /CE directly, bypassing the
+    # GAL entirely -- no ROML pin exists on U1.
+    "ROML_N": [("J1", "11"), ("U2", "43")],
+    "FLASH_OE_N": [("U1", "21"), ("U2", "29")],
+    "FLASH_WE_N": [("U1", "22"), ("U2", "30"), ("R1", "2")],  # + 10k pull-up to VCC (R1)
+    # --- TBD: still undefined in SUPER_CART_R01.PLD rev 0.2 ---
     "TBD_FLASH_RYBY_N": [("U2", "28")],
-    "TBD_GAME_N": [("J1", "8")],
-    "TBD_EXROM_N": [("J1", "9")],
-    "TBD_ROML_N": [("J1", "11")],
     "TBD_ROMH_N": [("J1", "B")],
 }
 
 # Pins deliberately left unconnected (out of current design scope; not asked
-# for and not implemented anywhere in SUPER_CART_R01.PLD or the roadmap docs)
+# for and not implemented anywhere in SUPER_CART_R01.PLD or the roadmap docs).
+# U1 pin 23 (CTRL2): no longer planned as an external control output --
+# WRITE_ARM write-safety interlock is meant to live as an internal registered
+# term feeding FLASH_WE_N, not its own pin (see SUPER_CART_R01.PLD comments).
 no_connects = [
+    ("U1", "23"),
     ("U2", "1"), ("U2", "11"), ("U2", "12"), ("U2", "31"), ("U2", "32"), ("U2", "33"), ("U2", "34"),
     ("J1", "4"), ("J1", "6"), ("J1", "10"), ("J1", "12"), ("J1", "13"), ("J1", "D"),
     # A13-A15: real C64 address lines this design doesn't need directly -- the

@@ -1,0 +1,659 @@
+<title>SUPER CARTRIDGE — Pinout &amp; Bank Logic Reference</title>
+<style>
+  :root {
+    --bg: #0a1220;
+    --panel: #101c30;
+    --panel-2: #0c1728;
+    --border: #223350;
+    --text: #e8eef7;
+    --muted: #90a4c2;
+    --faint: #56698c;
+    --accent: #c9a227;
+    --accent-dim: #7a6420;
+
+    --addr: #57c7e3;
+    --data: #e2793e;
+    --ctrl: #9b87f5;
+    --pwr: #e0546b;
+    --gnd: #5fbf7a;
+    --nc: #4a5a78;
+    --tie: #d9b23c;
+
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Roboto Mono", "Liberation Mono", monospace;
+    --sans: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  :root[data-theme="light"] {
+    --bg: #eef1f6;
+    --panel: #ffffff;
+    --panel-2: #f5f7fb;
+    --border: #d3dbe8;
+    --text: #101827;
+    --muted: #4b5a75;
+    --faint: #8595b0;
+    --accent: #9c7b14;
+    --accent-dim: #cbb15a;
+
+    --addr: #0e7fa0;
+    --data: #b2551c;
+    --ctrl: #6a4fd6;
+    --pwr: #c22f4a;
+    --gnd: #24824a;
+    --nc: #7686a3;
+    --tie: #a9800f;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #eef1f6;
+      --panel: #ffffff;
+      --panel-2: #f5f7fb;
+      --border: #d3dbe8;
+      --text: #101827;
+      --muted: #4b5a75;
+      --faint: #8595b0;
+      --accent: #9c7b14;
+      --accent-dim: #cbb15a;
+
+      --addr: #0e7fa0;
+      --data: #b2551c;
+      --ctrl: #6a4fd6;
+      --pwr: #c22f4a;
+      --gnd: #24824a;
+      --nc: #7686a3;
+      --tie: #a9800f;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .sheet {
+    max-width: 1360px;
+    margin: 0 auto;
+    padding: 28px 24px 60px;
+  }
+
+  /* ---------- masthead ---------- */
+  header.mast {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 24px;
+    flex-wrap: wrap;
+    padding-bottom: 18px;
+    border-bottom: 2px solid var(--accent);
+    margin-bottom: 22px;
+  }
+  .mast-title h1 {
+    margin: 0 0 6px;
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: clamp(1.3rem, 2.4vw, 2rem);
+    letter-spacing: 0.02em;
+    text-wrap: balance;
+    color: var(--text);
+  }
+  .mast-title h1 span { color: var(--accent); }
+  .mast-title p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.92rem;
+    max-width: 62ch;
+  }
+  .mast-meta {
+    text-align: right;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--faint);
+    line-height: 1.6;
+  }
+  .mast-meta strong { color: var(--muted); font-weight: 600; }
+
+  h2.section-label {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 30px 0 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h2.section-label::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* ---------- connector diagram ---------- */
+  .connector-wrap { overflow-x: auto; }
+  .connector {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    min-width: 900px;
+  }
+  .connector .cap {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    color: var(--faint);
+    padding: 8px 12px 0;
+    display: flex;
+    justify-content: space-between;
+  }
+  .row22 {
+    display: grid;
+    grid-template-columns: repeat(22, 1fr);
+    gap: 2px;
+    padding: 6px 10px;
+  }
+  .pin-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 5px 2px;
+    border-radius: 2px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    min-height: 46px;
+  }
+  .pin-cell .num {
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    color: var(--faint);
+  }
+  .pin-cell .sig {
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+  }
+  .pin-cell.unused { opacity: 0.38; }
+  .pin-cell.unused .sig { font-weight: 500; }
+
+  .pin-cell.addr .sig { color: var(--addr); }
+  .pin-cell.data .sig { color: var(--data); }
+  .pin-cell.ctrl .sig { color: var(--ctrl); }
+  .pin-cell.pwr  .sig { color: var(--pwr); }
+  .pin-cell.gnd  .sig { color: var(--gnd); }
+  .pin-cell.nc   .sig { color: var(--nc); }
+
+  .pin-cell.hwtie { border-color: var(--tie); border-style: dashed; border-width: 1.5px; }
+
+  .connector .footnote {
+    font-size: 0.72rem;
+    color: var(--faint);
+    padding: 8px 12px 12px;
+    border-top: 1px solid var(--border);
+    margin-top: 6px;
+  }
+  .connector .footnote code { font-family: var(--mono); color: var(--muted); }
+
+  /* ---------- panel grid ---------- */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 14px;
+    align-items: start;
+  }
+  .grid.wide-first { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 14px 16px 16px;
+  }
+  .panel.span2 { grid-column: span 2; }
+  @media (max-width: 720px) { .panel.span2 { grid-column: span 1; } }
+
+  .panel h3 {
+    margin: 0 0 10px;
+    font-family: var(--sans);
+    font-size: 0.86rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel h3 .chip {
+    width: 9px; height: 9px; border-radius: 2px; flex: none;
+  }
+  .panel p, .panel li { font-size: 0.83rem; line-height: 1.55; color: var(--muted); }
+  .panel ul { margin: 0; padding-left: 1.1em; }
+  .panel li { margin-bottom: 4px; }
+  .panel .eqn {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 8px 10px;
+    color: var(--text);
+    margin: 6px 0;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .panel .note {
+    font-size: 0.74rem;
+    color: var(--faint);
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border);
+  }
+
+  /* ---------- pin tables ---------- */
+  .tbl-wrap { overflow-x: auto; }
+  table.pins {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    font-variant-numeric: tabular-nums;
+  }
+  table.pins th {
+    text-align: left;
+    font-size: 0.66rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--faint);
+    font-weight: 600;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  table.pins td {
+    padding: 3px 8px;
+    border-bottom: 1px solid var(--panel-2);
+    white-space: nowrap;
+  }
+  table.pins td.pn { color: var(--faint); width: 1.8em; }
+  table.pins tr:hover td { background: var(--panel-2); }
+  .swatch {
+    display: inline-block;
+    width: 7px; height: 7px; border-radius: 1px;
+    margin-right: 6px;
+  }
+  .u1u2-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 18px; }
+  @media (max-width: 560px) { .u1u2-cols { grid-template-columns: 1fr; } }
+
+  /* ---------- bank map ---------- */
+  .bankmap { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); }
+  .bankmap .row { display: flex; justify-content: space-between; padding: 2px 0; }
+  .bankmap .row.hl { color: var(--text); }
+  .bankmap .dots { color: var(--faint); text-align: center; padding: 2px 0; }
+
+  /* ---------- legend / footer ---------- */
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    padding: 14px 16px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    margin-top: 20px;
+  }
+  .legend .item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 0.76rem;
+    color: var(--muted);
+    font-family: var(--sans);
+  }
+  .legend .sw { width: 11px; height: 11px; border-radius: 2px; flex: none; }
+
+  .callout {
+    margin-top: 12px;
+    padding: 12px 16px;
+    background: var(--panel);
+    border: 1px solid var(--tie);
+    border-left: 3px solid var(--tie);
+    border-radius: 3px;
+    font-size: 0.82rem;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+  .callout strong { color: var(--text); }
+
+  footer.src {
+    margin-top: 22px;
+    font-size: 0.72rem;
+    color: var(--faint);
+    font-family: var(--mono);
+    line-height: 1.7;
+  }
+
+  a { color: var(--addr); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+  /* ---------- print ---------- */
+  @page { size: landscape; margin: 12mm 14mm; }
+
+  @media print {
+    :root, :root[data-theme="dark"], :root[data-theme="light"] {
+      --bg: #ffffff;
+      --panel: #ffffff;
+      --panel-2: #f4f6fa;
+      --border: #c7d0de;
+      --text: #101827;
+      --muted: #3d4a63;
+      --faint: #6b7890;
+      --accent: #8a6b10;
+      --accent-dim: #cbb15a;
+
+      --addr: #0e7fa0;
+      --data: #b2551c;
+      --ctrl: #6a4fd6;
+      --pwr: #c22f4a;
+      --gnd: #24824a;
+      --nc: #7686a3;
+      --tie: #a9800f;
+    }
+
+    html, body { background: #fff; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+    .sheet { max-width: none; padding: 0; }
+
+    /* Grid layouts paginate unreliably across browsers -- flow panels as
+       plain blocks in print so each one either fully fits on a page or
+       moves to the next, never split mid-content. */
+    .grid, .grid.wide-first, .u1u2-cols { display: block; }
+    .grid > *, .grid.wide-first > * { margin-bottom: 10px; }
+    .panel.span2 { grid-column: unset; }
+    .u1u2-cols table.pins { margin-bottom: 8px; }
+
+    header.mast, h2.section-label { break-after: avoid; page-break-after: avoid; }
+    .panel, .connector, table.pins, tr, .eqn, .legend, .callout, .bankmap {
+      break-inside: avoid;
+      break-inside: avoid-page;
+      page-break-inside: avoid;
+    }
+
+    /* An overflow:auto box establishes its own formatting context that
+       print engines (Chrome in particular) will fragment across a page
+       boundary regardless of break-inside -- confirmed 2026-08-22, the
+       .eqn code block was splitting mid-line even with break-inside set.
+       Print never needs scrolling, so drop overflow on every such box. */
+    .panel .eqn {
+      overflow: visible;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .tbl-wrap, .connector-wrap { overflow: visible; }
+    .connector { min-width: 0; }
+    .row22 { gap: 2px; padding: 5px 8px; }
+    .pin-cell { min-height: 36px; padding: 4px 2px; border-width: 1px; }
+    .pin-cell .num { font-size: 6.5pt; }
+    .pin-cell .sig { font-size: 7.2pt; }
+    .pin-cell.hwtie { border-width: 1.25px; }
+
+    /* Landscape's extra width covers both pin tables side by side. */
+    .panel.span2 .u1u2-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 18px; }
+
+    table.pins { font-size: 8.5pt; }
+    .panel p, .panel li { font-size: 9.5pt; }
+    .panel .eqn { font-size: 9pt; }
+
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+
+<div class="sheet">
+
+  <header class="mast">
+    <div class="mast-title">
+      <h1>SUPER CARTRIDGE <span>— ATF22V10C + AM29F080B</span></h1>
+      <p>C64 expansion port · ATF22V10C-7SX bank/write-arm decoder · AM29F080B-90S flash, 1&nbsp;MB / 128&nbsp;banks &times; 8&nbsp;KB · verified against <code style="font-family:var(--mono)">SUPER_CART_R01.PLD</code> rev&nbsp;0.2</p>
+    </div>
+    <div class="mast-meta">
+      <div><strong>N4LDR</strong> · 22 Aug 2026</div>
+      <div>hardware/supercart/</div>
+    </div>
+  </header>
+
+  <h2 class="section-label">J1 — C64/C128 expansion port (rear view of C64)</h2>
+  <div class="connector-wrap">
+    <div class="connector">
+      <div class="cap"><span>TOP ROW — numbered side, 22 → 1</span><span>dimmed = present on connector, not used by this board</span></div>
+      <div class="row22" id="rowTop"></div>
+      <div class="row22" id="rowBot"></div>
+      <div class="footnote">
+        Pin <code>3</code> tied to <code>VCC</code> and pin <code>A</code> tied to <code>GND</code> on this board (both documented blank/reserved by the generic C64 spec) — precedent from a real, working reference cartridge, adopted 2026-08-21.
+        Lettered pins <code>F</code>/<code>H</code>/<code>J</code> (C64&nbsp;A15/A14/A13) are real address lines but unused here — this board's flash A13&ndash;A19 come from U1's bank register instead, not the C64's own upper address bits.
+      </div>
+    </div>
+  </div>
+
+  <h2 class="section-label">Decode &amp; bus wiring</h2>
+  <div class="grid">
+    <div class="panel">
+      <h3><span class="chip" style="background:var(--ctrl)"></span>EEPLD decode / bank control</h3>
+      <ul>
+        <li><code style="font-family:var(--mono)">IO1_N</code> + <code style="font-family:var(--mono)">RW</code> + <code style="font-family:var(--mono)">PHI2</code> qualify a <code style="font-family:var(--mono)">$DE00</code> write.</li>
+        <li>D0&ndash;D6 latch into BANK0&ndash;BANK6 (7 bits → 128 banks).</li>
+        <li>D7 latches into WRITE_ARM.</li>
+        <li>FLASH_OE_N / FLASH_WE_N are combinational — driven by RW/PHI2/WRITE_ARM directly, not by the bank register.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3><span class="chip" style="background:var(--addr)"></span>Flash address / data bus</h3>
+      <ul>
+        <li>C64 A0&ndash;A12 → Flash A0&ndash;A12 (direct, no GAL).</li>
+        <li>C64 D0&ndash;D7 → Flash DQ0&ndash;DQ7 (direct).</li>
+        <li>U1 BANK0&ndash;BANK6 → Flash A13&ndash;A19 (selects the visible 8&nbsp;KB page).</li>
+        <li>/ROML → Flash /CE, directly on the PCB (not through U1).</li>
+        <li>/OE ← FLASH_OE_N, /WE ← FLASH_WE_N (both from U1).</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2 class="section-label">U1 — ATF22V10C-7SX (24-pin SOIC)</h2>
+  <div class="grid">
+    <div class="panel span2">
+      <h3>Pin table — source: <span style="font-family:var(--mono); font-weight:400; color:var(--muted)">EEPLD/SUPER_CART_R01.PLD</span> rev 0.2</h3>
+      <div class="tbl-wrap">
+        <div class="u1u2-cols">
+          <table class="pins">
+            <thead><tr><th>Pin</th><th>Signal</th></tr></thead>
+            <tbody id="u1left"></tbody>
+          </table>
+          <table class="pins">
+            <thead><tr><th>Pin</th><th>Signal</th></tr></thead>
+            <tbody id="u1right"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="note">Pins 12 (GND) and 24 (VCC) are the package power pins — not declared in the CUPL source. Pin 23 (WRITE_ARM) is a real registered macrocell but is left unconnected on the PCB — internal use only.</div>
+    </div>
+
+    <div class="panel">
+      <h3><span class="chip" style="background:var(--gnd)"></span>Bank register + write-arm</h3>
+      <div class="eqn">bank_load_en = !IO1_N &amp; !RW
+
+BANKn.D = (bank_load_en &amp; Dn)
+        # (!bank_load_en &amp; BANKn)
+WRITE_ARM.D = (bank_load_en &amp; D7)
+            # (!bank_load_en &amp; WRITE_ARM)
+
+.CK = PHI2      .AR = !RESET_N</div>
+      <p>Loads only on a qualifying $DE00 write; otherwise every bit holds its previous value via feedback. /RESET async-clears BANK0&ndash;6 <em>and</em> WRITE_ARM to 0.</p>
+    </div>
+
+    <div class="panel">
+      <h3><span class="chip" style="background:var(--tie)"></span>Software interface</h3>
+      <div class="eqn">POKE 56832, n        ; bank n (0-127)
+                      ; writes OFF
+
+POKE 56832, n+128    ; bank n (0-127)
+                      ; writes ON  (D7=1)</div>
+      <p>$DE00 = 56832 decimal. A single write both selects the bank and sets the write-arm state — there is no separate unlock address.</p>
+    </div>
+  </div>
+
+  <h2 class="section-label">U2 — AM29F080B-90S (44-pin SO, top view)</h2>
+  <div class="grid">
+    <div class="panel span2">
+      <h3>Pin table — source: AM29F080B_datasheet_21503G8.pdf, Connection Diagrams</h3>
+      <div class="tbl-wrap">
+        <div class="u1u2-cols">
+          <table class="pins">
+            <thead><tr><th>Pin</th><th>Signal</th></tr></thead>
+            <tbody id="u2left"></tbody>
+          </table>
+          <table class="pins">
+            <thead><tr><th>Pin</th><th>Signal</th></tr></thead>
+            <tbody id="u2right"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="note">Ordering code <code style="font-family:var(--mono)">-90S</code>: 90&nbsp;ns, <strong>S = 44-pin SO</strong> (the only two package codes for this part are E = 40-pin TSOP and S = 44-pin SO — there is no "PSOP" option).</div>
+    </div>
+
+    <div class="panel">
+      <h3><span class="chip" style="background:var(--data)"></span>AM29F080B notes</h3>
+      <ul>
+        <li>8 Megabit, organized 1,048,576 &times; 8 (1&nbsp;MB &times; 8-bit).</li>
+        <li>Single 5&nbsp;V supply for read, program, <em>and</em> erase.</li>
+        <li>16 &times; 64&nbsp;KB internal erase sectors (SA0&ndash;SA15, addressed by A16&ndash;A19) — a flash-internal boundary, separate from this board's own 128&nbsp;&times;&nbsp;8&nbsp;KB bank convention.</li>
+        <li>/CE from /ROML (direct, PCB) · /OE, /WE from U1.</li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <h3><span class="chip" style="background:var(--pwr)"></span>/OE &amp; /WE generation</h3>
+      <div class="eqn">FLASH_OE_N = !RW
+FLASH_WE_N = !(WRITE_ARM &amp; !RW &amp; PHI2)</div>
+      <p>/WE pulses low only while writes are armed, the CPU is writing, <em>and</em> PHI2 is high — ties the pulse to the clock's stable data phase.</p>
+      <div class="note">R1 (10&nbsp;k&Omega;, FLASH_WE_N&rarr;VCC) holds /WE high whenever U1 isn't actively driving it low — e.g. during power-up before the GAL is stable.</div>
+    </div>
+  </div>
+
+  <h2 class="section-label">Bank map — static 8 KB window</h2>
+  <div class="grid">
+    <div class="panel">
+      <h3>CPU-visible window</h3>
+      <div class="bankmap">
+        <div class="row hl"><span>$8000&ndash;$9FFF</span><span>fixed for every bank</span></div>
+        <div class="row"><span>Bank 0</span><span>flash $000000&ndash;$001FFF</span></div>
+        <div class="row"><span>Bank 1</span><span>flash $002000&ndash;$003FFF</span></div>
+        <div class="dots">&hellip;</div>
+        <div class="row"><span>Bank 127</span><span>flash $0FE000&ndash;$0FFFFF</span></div>
+      </div>
+      <p style="margin-top:10px">Every bank maps into the <em>same</em> $8000&ndash;$9FFF window — BANK0&ndash;BANK6 just changes which 8&nbsp;KB page of the 1&nbsp;MB flash is currently visible there.</p>
+    </div>
+    <div class="panel">
+      <h3>Cartridge mode</h3>
+      <p>/GAME tied directly to <strong>+5V</strong>, /EXROM tied directly to <strong>GND</strong> — both hardwired on the PCB, not GAL signals.</p>
+      <p>Permanently <strong>static 8&nbsp;K</strong>. No Ultimax boot phase, no mode-switching bootloader.</p>
+    </div>
+    <div class="panel">
+      <h3>Open items (rev 0.3)</h3>
+      <ul>
+        <li>RY/BY# (flash pin 28) not read by U1 yet.</li>
+        <li>/ROMH (connector pin B) still undefined/unconnected — not needed for static 8K, left open in case that changes.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="item"><span class="sw" style="background:var(--addr)"></span>Address (C64)</div>
+    <div class="item"><span class="sw" style="background:var(--data)"></span>Data (C64)</div>
+    <div class="item"><span class="sw" style="background:var(--ctrl)"></span>Control / decode</div>
+    <div class="item"><span class="sw" style="background:var(--pwr)"></span>Power</div>
+    <div class="item"><span class="sw" style="background:var(--gnd)"></span>Ground / bank</div>
+    <div class="item"><span class="sw" style="background:var(--nc)"></span>NC (no-connect on the chip)</div>
+    <div class="item"><span class="sw" style="border:1.5px dashed var(--tie); background:transparent"></span>Hardwired tie on this board</div>
+    <div class="item"><span class="sw" style="background:var(--muted); opacity:.4"></span>Present on connector, unused here</div>
+  </div>
+
+  <footer class="src">
+    Sources: EEPLD/SUPER_CART_R01.PLD rev 0.2 (compiled CUPL, ground truth for U1) · AM29F080B_datasheet_21503G8.pdf, Connection Diagrams &amp; Ordering Information · ATF22V10C_datasheet_doc0735.pdf · c64-wiki.com Expansion Port table, cross-checked pin-for-pin against hardware/TestBoard/EpyxFastLoad.kicad_pcb · full detail in hardware/supercart/PINOUTS.md.
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  // [pinLabel, signal, category, used, hardwiredTieOnThisBoard]
+  var top = [
+    ['22','GND','gnd',true], ['21','D0','data',true], ['20','D1','data',true], ['19','D2','data',true],
+    ['18','D3','data',true], ['17','D4','data',true], ['16','D5','data',true], ['15','D6','data',true],
+    ['14','D7','data',true], ['13','/DMA','ctrl',false], ['12','BA','ctrl',false], ['11','/ROML','ctrl',true],
+    ['10','/IO2','ctrl',false], ['9','/EXROM','gnd',true,true], ['8','/GAME','pwr',true,true], ['7','/IO1','ctrl',true],
+    ['6','DOTCLK','ctrl',false], ['5','R/W','ctrl',true], ['4','/IRQ','ctrl',false], ['3','VCC','pwr',true,true],
+    ['2','VCC','pwr',true], ['1','GND','gnd',true]
+  ];
+  var bot = [
+    ['Z','GND','gnd',true], ['Y','A0','addr',true], ['X','A1','addr',true], ['W','A2','addr',true],
+    ['V','A3','addr',true], ['U','A4','addr',true], ['T','A5','addr',true], ['S','A6','addr',true],
+    ['R','A7','addr',true], ['P','A8','addr',true], ['N','A9','addr',true], ['M','A10','addr',true],
+    ['L','A11','addr',true], ['K','A12','addr',true], ['J','A13','addr',false], ['H','A14','addr',false],
+    ['F','A15','addr',false], ['E','PHI2','ctrl',true], ['D','/NMI','ctrl',false], ['C','/RESET','ctrl',true],
+    ['B','/ROMH','ctrl',false], ['A','GND','gnd',true,true]
+  ];
+
+  function cell(p) {
+    var d = document.createElement('div');
+    d.className = 'pin-cell ' + p[2] + (p[3] ? '' : ' unused') + (p[4] ? ' hwtie' : '');
+    d.innerHTML = '<span class="num">' + p[0] + '</span><span class="sig">' + p[1] + '</span>';
+    return d;
+  }
+  var rowTop = document.getElementById('rowTop');
+  var rowBot = document.getElementById('rowBot');
+  top.forEach(function (p) { rowTop.appendChild(cell(p)); });
+  bot.forEach(function (p) { rowBot.appendChild(cell(p)); });
+
+  function fillTable(id, rows) {
+    var tbody = document.getElementById(id);
+    tbody.innerHTML = rows.map(function (r) {
+      return '<tr><td class="pn">' + r[0] + '</td><td><span class="swatch" style="background:var(--' + r[2] + ')"></span>' + r[1] + '</td></tr>';
+    }).join('');
+  }
+
+  fillTable('u1left', [
+    ['1','PHI2','ctrl'], ['2','D0','data'], ['3','D1','data'], ['4','D2','data'],
+    ['5','D3','data'], ['6','D4','data'], ['7','D5','data'], ['8','D6','data'],
+    ['9','D7','data'], ['10','IO1_N','ctrl'], ['11','RW','ctrl'], ['12','GND','gnd']
+  ]);
+  fillTable('u1right', [
+    ['24','VCC','pwr'], ['23','WRITE_ARM *','ctrl'], ['22','FLASH_WE_N','pwr'], ['21','FLASH_OE_N','pwr'],
+    ['20','BANK6','gnd'], ['19','BANK5','gnd'], ['18','BANK4','gnd'], ['17','BANK3','gnd'],
+    ['16','BANK2','gnd'], ['15','BANK1','gnd'], ['14','BANK0','gnd'], ['13','RESET_N','ctrl']
+  ]);
+
+  fillTable('u2left', [
+    ['1','NC','nc'], ['2','RESET#','ctrl'], ['3','A11','addr'], ['4','A10','addr'],
+    ['5','A9','addr'], ['6','A8','addr'], ['7','A7','addr'], ['8','A6','addr'],
+    ['9','A5','addr'], ['10','A4','addr'], ['11','NC','nc'], ['12','NC','nc'],
+    ['13','A3','addr'], ['14','A2','addr'], ['15','A1','addr'], ['16','A0','addr'],
+    ['17','DQ0','data'], ['18','DQ1','data'], ['19','DQ2','data'], ['20','DQ3','data'],
+    ['21','VSS','gnd'], ['22','VSS','gnd']
+  ]);
+  fillTable('u2right', [
+    ['44','VCC','pwr'], ['43','CE#','ctrl'], ['42','A12','addr'], ['41','A13 (BANK0)','gnd'],
+    ['40','A14 (BANK1)','gnd'], ['39','A15 (BANK2)','gnd'], ['38','A16 (BANK3)','gnd'], ['37','A17 (BANK4)','gnd'],
+    ['36','A18 (BANK5)','gnd'], ['35','A19 (BANK6)','gnd'], ['34','NC','nc'], ['33','NC','nc'],
+    ['32','NC','nc'], ['31','NC','nc'], ['30','WE#','pwr'], ['29','OE#','pwr'],
+    ['28','RY/BY#','ctrl'], ['27','DQ7','data'], ['26','DQ6','data'], ['25','DQ5','data'],
+    ['24','DQ4','data'], ['23','VCC','pwr']
+  ]);
+})();
+</script>

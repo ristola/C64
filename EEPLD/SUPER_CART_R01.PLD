@@ -1,0 +1,183 @@
+Name     SUPER_CART;
+PartNo   001;
+Date     08/21/2026;
+Revision 0.2;
+Designer N4LDR;
+Company  ;
+Assembly SUPER_CARTRIDGE;
+Location U1;
+Device   G22V10;
+
+/***********************************************************************
+ * C64 SUPER CARTRIDGE - REGISTERED BANK SELECT + WRITE-ARM
+ *
+ * Target PLD:
+ *   ATF22V10C
+ *
+ * Prototype:
+ *   ATF22V10C-7SX  = 24-pin SOIC
+ *
+ * Planned Flash:
+ *   Prototype: AM29F040B = 512 KB = 64 x 8 KB banks
+ *   Final:     AM29F080B =   1 MB = 128 x 8 KB banks
+ *
+ * C64 bank register:
+ *   $DE00 area via /IO1
+ *
+ * MACROCELL ALLOCATION (all 10 I/O macrocells used, decided 2026-08-21):
+ *   7 registered   -- BANK0-BANK6
+ *   1 registered   -- WRITE_ARM (pin 23; not routed externally on the PCB,
+ *                      but IS a real macrocell, not a spare -- see below)
+ *   2 combinational -- FLASH_OE_N, FLASH_WE_N
+ *
+ * FLASH CONTROL ASSIGNMENT:
+ *   /ROML from the cartridge edge connector drives Flash /CE directly on
+ *     the PCB -- does NOT route through this GAL at all (no ROML pin is
+ *     declared here; see hardware/supercart/ schematic).
+ *   FLASH_OE_N (pin 21, was CTRL0) -> Flash /OE.
+ *   FLASH_WE_N (pin 22, was CTRL1) -> Flash /WE.
+ *   Cartridge mode is hardwired static 8K (not Ultimax, no mode-switching
+ *     bootloader): C64 /EXROM tied to GND, /GAME tied high, both directly
+ *     on the PCB -- neither is a GAL signal.
+ *
+ * BANK REGISTER + WRITE-ARM BEHAVIOR (decided 2026-08-21):
+ *   On each PHI2 rising edge, if the C64 is performing a write while /IO1
+ *   is asserted (IO1_N=0 and RW=0, i.e. a $DE00 write), latch:
+ *     BANK0..BANK6 <= D0..D6
+ *     WRITE_ARM    <= D7
+ *   Otherwise all eight registered bits retain their previous value.
+ *   /RESET (async) clears BANK0..BANK6 and WRITE_ARM to 0 -- the cartridge
+ *   always comes back up on Bank 0 with Flash writes disabled. The ATF also
+ *   performs its own internal power-up reset to the same effect, provided
+ *   its power-up requirements are met.
+ *
+ *   Software interface ($DE00 = 56832 decimal):
+ *     POKE 56832,0..127   -- select bank 0-127, Flash writes stay disabled
+ *                             (bit 7 / D7 = 0)
+ *     POKE 56832,128..255 -- select bank (value AND 127), Flash writes ARMED
+ *                             (bit 7 / D7 = 1)
+ *
+ * FLASH_OE_N: asserted only during a C64 read (RW=1 -> OE=0, RW=0 -> OE=1),
+ *   so the flash never fights the bus during a write.
+ * FLASH_WE_N: asserted only when WRITE_ARM=1 AND RW=0 (write) AND PHI2=1
+ *   (high phase) -- ties the write pulse to the CPU clock's stable data
+ *   phase, same technique other flash carts use to generate a clean pulse.
+ * A 10k pull-up from FLASH_WE_N to +5V lives on the PCB (R1) so the flash
+ *   defaults write-protected (WE deasserted/high) any time the GAL isn't
+ *   actively driving the pin low, e.g. during power-up sequencing.
+ ***********************************************************************/
+
+/***********************************************************************
+ * PHYSICAL PIN ASSIGNMENTS
+ *
+ *                   +----------+
+ *      PHI2 / CLK  1|          |24  VCC (+5V)
+ *              D0  2|          |23  WRITE_ARM (registered; not routed
+ *              D1  3|          |    externally on the PCB)
+ *              D2  4|          |22  FLASH_WE_N (was CTRL1)
+ *              D3  5|          |21  FLASH_OE_N (was CTRL0)
+ *              D4  6|          |20  BANK6
+ *              D5  7|          |19  BANK5
+ *              D6  8|          |18  BANK4
+ *              D7  9|          |17  BANK3
+ *          /IO1_N 10|          |16  BANK2
+ *             R/W 11|          |15  BANK1
+ *             GND 12|          |14  BANK0
+ *                   |          |13  /RESET_N
+ *                   +----------+
+ *
+ * Pins 12 and 24 are power pins and are NOT declared in CUPL.
+ ***********************************************************************/
+
+/* -------------------- C64 BUS INPUTS -------------------- */
+
+PIN 1  = PHI2;       /* Dedicated clock/input pin.                 */
+PIN 2  = D0;         /* C64 data bit 0.                            */
+PIN 3  = D1;         /* C64 data bit 1.                            */
+PIN 4  = D2;         /* C64 data bit 2.                            */
+PIN 5  = D3;         /* C64 data bit 3.                            */
+PIN 6  = D4;         /* C64 data bit 4.                            */
+PIN 7  = D5;         /* C64 data bit 5.                            */
+PIN 8  = D6;         /* C64 data bit 6.                            */
+PIN 9  = D7;         /* C64 data bit 7.                            */
+PIN 10 = IO1_N;      /* C64 /IO1. LOW for $DE00-$DEFF accesses.   */
+PIN 11 = RW;         /* C64 R/W: HIGH=read, LOW=write.             */
+PIN 13 = RESET_N;    /* C64 /RESET. LOW while C64 is in reset.     */
+
+/* -------------------- FLASH BANK OUTPUTS (registered) -------------------- */
+
+PIN 14 = BANK0;      /* -> Flash A13, bank bit 0.                  */
+PIN 15 = BANK1;      /* -> Flash A14, bank bit 1.                  */
+PIN 16 = BANK2;      /* -> Flash A15, bank bit 2.                  */
+PIN 17 = BANK3;      /* -> Flash A16, bank bit 3.                  */
+PIN 18 = BANK4;      /* -> Flash A17, bank bit 4.                  */
+PIN 19 = BANK5;      /* -> Flash A18, bank bit 5.                  */
+PIN 20 = BANK6;      /* -> Flash A19, bank bit 6 (1 MB version).   */
+
+/* -------------------- FLASH CONTROL OUTPUTS (combinational) -------------------- */
+/* Renamed from CTRL0/CTRL1 2026-08-21. Flash /CE is NOT one of this GAL's  */
+/* pins -- /ROML drives it directly on the PCB.                            */
+
+PIN 21 = FLASH_OE_N; /* -> Flash /OE. Was CTRL0.                          */
+PIN 22 = FLASH_WE_N; /* -> Flash /WE. Was CTRL1.                          */
+
+/* -------------------- WRITE-ARM (registered, not routed externally) -------------------- */
+
+PIN 23 = WRITE_ARM;  /* Was CTRL2/spare. Real registered macrocell holding */
+                      /* the flash-write-enable latch (D7 of the last      */
+                      /* qualifying $DE00 write); pin 23 itself is left    */
+                      /* unconnected on the PCB, only used internally here. */
+
+/***********************************************************************
+ * BANK REGISTER + WRITE-ARM LOGIC
+ *
+ * Loads a new value only on a qualifying $DE00 write (IO1_N=0, RW=0);
+ * otherwise each bit holds its previous value via feedback. Async-cleared
+ * to 0 by /RESET. See header comment for the full behavior/software
+ * interface writeup.
+ ***********************************************************************/
+
+bank_load_en = !IO1_N & !RW;
+
+BANK0.D = (bank_load_en & D0) # (!bank_load_en & BANK0);
+BANK1.D = (bank_load_en & D1) # (!bank_load_en & BANK1);
+BANK2.D = (bank_load_en & D2) # (!bank_load_en & BANK2);
+BANK3.D = (bank_load_en & D3) # (!bank_load_en & BANK3);
+BANK4.D = (bank_load_en & D4) # (!bank_load_en & BANK4);
+BANK5.D = (bank_load_en & D5) # (!bank_load_en & BANK5);
+BANK6.D = (bank_load_en & D6) # (!bank_load_en & BANK6);
+WRITE_ARM.D = (bank_load_en & D7) # (!bank_load_en & WRITE_ARM);
+
+BANK0.CK = PHI2;
+BANK1.CK = PHI2;
+BANK2.CK = PHI2;
+BANK3.CK = PHI2;
+BANK4.CK = PHI2;
+BANK5.CK = PHI2;
+BANK6.CK = PHI2;
+WRITE_ARM.CK = PHI2;
+
+BANK0.AR = !RESET_N;
+BANK1.AR = !RESET_N;
+BANK2.AR = !RESET_N;
+BANK3.AR = !RESET_N;
+BANK4.AR = !RESET_N;
+BANK5.AR = !RESET_N;
+BANK6.AR = !RESET_N;
+WRITE_ARM.AR = !RESET_N;
+
+/***********************************************************************
+ * FLASH CONTROL LOGIC. See header comment for the reasoning behind each.
+ ***********************************************************************/
+
+FLASH_OE_N = !RW;
+FLASH_WE_N = !(WRITE_ARM & !RW & PHI2);
+
+/***********************************************************************
+ * NEXT REVISION (0.3)
+ *
+ * Open items:
+ *   - RY/BY# (Flash pin 28) is not read by this GAL at all yet.
+ *   - /ROMH (edge connector pin B) is still undefined/unconnected -- not
+ *     needed for static 8K mode, but left open in case that changes.
+ ***********************************************************************/

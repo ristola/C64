@@ -9,3 +9,8 @@
 ~*.lck
 .DS_Store
 hardware/**/.history/
+
+# KiCad routing pipeline: downloaded tools and generated/derived board files
+hardware/supercart/tools/
+hardware/supercart/*.dsn
+hardware/supercart/*.ses
