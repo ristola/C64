@@ -14,3 +14,10 @@ hardware/**/.history/
 hardware/supercart/tools/
 hardware/supercart/*.dsn
 hardware/supercart/*.ses
+
+# Commercial ROM dumps / cartridge images - never belong in version control
+/crts/
+/eprom-reader/*.bin
+
+# Build/test disk images - regenerable output, not source
+/disks/

@@ -6,7 +6,7 @@
             "request": "launch",
             "name": "Launch Vice (Cartridge)",
             "program": "${workspaceFolder}/build/hello.crt",
-            "preLaunchTask": "Build Cartridge Image"
+            "preLaunchTask": "Build All"
         },
         {
             "type": "vice",

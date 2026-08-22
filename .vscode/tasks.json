@@ -8,14 +8,39 @@
             "options": {
                 "cwd": "${workspaceFolder}/hello"
             },
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
+            "group": "build",
             "presentation": {
                 "reveal": "always",
                 "panel": "shared",
                 "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Build CARTLAB",
+            "type": "shell",
+            "command": "./build_cartlab.sh",
+            "options": {
+                "cwd": "${workspaceFolder}/hello"
+            },
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Build All",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Build Cartridge Image",
+                "Build CARTLAB"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
             },
             "problemMatcher": []
         },
