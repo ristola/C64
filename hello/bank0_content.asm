@@ -76,9 +76,9 @@
 !fill SLOT_REBOOT-*, $ff
         jmp     RebootCmd
 
-; Reserved slot-table range continues to $80FF regardless of how many
-; slots this bank actually fills in - keeps it available for later
-; slots without ever having to relocate cart_start.
+; Reserved slot-table range continues to BANK_CONTENT_START regardless
+; of how many slots this bank actually fills in - keeps it available
+; for later slots without ever having to relocate cart_start.
 !fill BANK_CONTENT_START-*, $ff
 
 *=BANK_CONTENT_START
@@ -142,6 +142,19 @@ cart_start
                                    ; the jet animation/F1 menu forever,
                                    ; the exact symptom this counter itself
                                    ; was added to fix
+        sta     $11          ; menu_sparkle_update's 3 slot timers and
+        sta     $12          ; candidate indices (common.asm, bank 14)
+        sta     $13          ; - same "undefined power-on RAM" reasoning
+        sta     $14          ; as bank_call_depth above: without this,
+        sta     $15          ; the very first sparkle in each slot could
+        sta     $16          ; compare its candidate against garbage
+                               ; (harmless - just skips one candidate
+                               ; number arbitrarily, once), but zeroing
+                               ; costs nothing and avoids even that
+        sta     eprom_read_done  ; same "undefined power-on RAM" reasoning -
+                                    ; without this, EPROM DUMP could think a
+                                    ; read already happened before READ CHIP
+                                    ; (CARTRIDGE LAB, bank 15) ever ran
         sta     jet_charset_ready  ; jet_charset_setup (bank 14) sets
                                      ; this itself once its copy completes
         lda     #1
@@ -375,10 +388,35 @@ tas_clear_copy                ; progressively during the flyby now,
         rts
 
 ; Thin bank_call-convention wrapper around jet_setup, for irq_hook's
-; one-time boot invocation.
+; one-time boot invocation. Also prints "FASTLOAD" right below the
+; READY prompt here (not in resident.asm, which has no room left for
+; it - see slots.asm's SLOT_MLOAD comment on the same budget pressure)
+; - same one-time moment reinstall_hooks/this dispatch itself already
+; fire at in irq_hook, right after BASIC's cold start (which already
+; printed its own banner and READY. and left the cursor sitting
+; exactly where this belongs, untouched since). Gated on fastload_
+; enabled so it only appears when FASTLOAD (DLOAD's bank-13 FastDload
+; path) is actually on - matches real Epyx FastLoad-style carts, which
+; show this same banner under READY. The trailing CR pushes the cursor
+; to a fresh line afterward so the user's first typed command doesn't
+; run together with "FASTLOAD" on the same line.
 tower_anim_start
+        lda     fastload_enabled
+        beq     tower_anim_no_banner
+        ldx     #$00
+tower_fastload_banner_loop
+        lda     fastload_banner_txt,x
+        beq     tower_anim_no_banner
+        jsr     $ffd2
+        inx
+        bne     tower_fastload_banner_loop
+tower_anim_no_banner
         jsr     jet_setup
         jmp     bank_return
+
+fastload_banner_txt
+        !text   "FASTLOAD"
+        !byte   13,0
 
 ; JET command - replays the flyby on demand. Thin bank_return_basic-
 ; convention wrapper around the same jet_setup, for BASIC's own

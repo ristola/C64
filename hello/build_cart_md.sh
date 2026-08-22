@@ -22,7 +22,7 @@ cd "$(dirname "$0")"
 mkdir -p ../build
 rm -f ../build/bank_combined_md.bin
 
-for n in 0 1 2 3 4 5 6 7 8 9 10 11 12; do
+for n in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
     echo "=== Bank $n (Magic Desk, ROML only, no ROMH) ==="
     acme -f plain --strict-segments -DBANKNUM=$n -o ../build/bank${n}_md.bin bank_driver.asm
 

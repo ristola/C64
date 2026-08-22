@@ -71,6 +71,32 @@ CMDEND   = $cc           ; CLS=$cc only - the direct single-byte token
 EXTTOK     = $ce
 EXTFUNCTOK = $cf
 
+; NOTE: bare single-character command tokens ($/%/back-arrow, an earlier
+; "ShortTab" mechanism using $d0-$d2) were removed entirely, not just the
+; buffer-overflow bug in how they were dispatched - the underlying idea
+; is fundamentally unsafe with this tokenizer, not just the first
+; implementation of it. BASIC's crunch scans character-by-character
+; across a WHOLE line, not just at statement boundaries; a bare '$'
+; keyword-table entry matches every time '$' starts a fresh "word" -
+; which includes the ordinary type-suffix on any one-letter string
+; variable (A$, X$, ...), since 'A' gets taken as a plain literal
+; character (no keyword matches it alone) and '$' then starts its own
+; independent match attempt right after. LIST still displayed it
+; correctly (the detokenizer round-trips the token back to '$' for
+; display), which is exactly why this stayed hidden through every
+; LIST-based check done while building it - confirmed live via VICE:
+; "100 GET A$:IF A$="" THEN 100" in a real, otherwise-unrelated test
+; program silently corrupted A$'s own '$' into this token, producing
+; "?SYNTAX ERROR IN 100" the moment that line actually ran. Not a
+; regression from the buffer-overflow fix - the exact same failure mode
+; existed from when bare $/%/(originally /) first went into ExtTab, only
+; ever missed because nothing had exercised a string variable alongside
+; them until this test program did. DIR and DLOAD both already have
+; real multi-character ExtTab entries below (unaffected - real BASIC
+; keywords are always multi-character, so they're never independently
+; matched as just their trailing character the way a bare 1-byte token
+; is) and MLOAD gets one too now, replacing its own now-removed '%'.
+
 ; ============================================================
 ; Cross-bank call mechanism
 ; ============================================================
@@ -174,6 +200,37 @@ bank_commit
                                  ; NOT restoring it, unlike bank_return_basic
         cli
         jmp     BAS_NEWSTT
+
+; --- EPROM/bank page-copy helper for feat_eprom_dump (bank 15,
+; features.asm) - has to live here, not in features.asm itself, because
+; it runs AFTER bank_call has already switched in the bank being read:
+; features.asm's own code is no longer present anywhere in $8000-$97BF
+; once that happens, only the target bank's raw content is. Kept to a
+; bare copy loop (not also formatting/printing here) because the
+; resident kernel's own budget is tight - all the hex-digit/address
+; formatting happens back in features.asm, once bank_return has
+; restored bank 15, using the ordinary print_hexdump machinery already
+; there. rd_addr is the same physical zero-page bytes as features.asm's
+; hd_addr ($18/$19) - different name only because this is a separate
+; ACME assembly pass that never sees features.asm's own declaration
+; (same duplication already used for num_val/dly_cnt between common.asm
+; and features.asm). feat_eprom_dump sets rd_addr, then bank_call's in
+; with A = the bank to read; always copies exactly 128 bytes (one
+; fed_show page - see features.asm) into eprom_page_buf (slots.asm,
+; RAM). Ends with "jmp bank_return" (reached via bank_call's own
+; "jmp (call_ptr)", not a JSR, so there's no RTS to fall into).
+rd_addr  = $18
+resident_copy_page
+        ldy     #$00
+rcp_loop
+        lda     (rd_addr),y
+        sta     eprom_page_buf,y
+        iny
+        bpl     rcp_loop     ; Y: 0..127 all have bit7 clear, 128 sets it -
+                               ; exactly the 128 iterations this needs
+        bmi     bank_return  ; N is still set from the iny above (BPL just
+                               ; fell through instead of branching) -
+                               ; always true here, just a shorter JMP
 
 ; Template for the RAM bank-switch trampoline (see slots.asm's
 ; ram_bank_switch for why this has to run from RAM, not from here).
@@ -384,17 +441,18 @@ OkNew
                                  ; to just holding them off for this whole,
                                  ; brief round trip. bank_return_basic
                                  ; re-enables once safely back on bank 0.
-        sec
-        sbc     #CMDSTART       ; A = token index (0-based)
-        tax
-        lda     CmdSlotLoTab,x
-        sta     call_ptr
-        lda     #$80            ; every slot lives in $8010-$80FF
-        sta     call_ptr+1
-        lda     CmdBankTab,x
-        pha
-        jsr     BAS_CHRGET
-        pla
+        lda     #<SLOT_CLS      ; CMDSTART==CMDEND==$CC (see that constant's
+        sta     call_ptr          ; own comment) - CLS is the ONLY token
+        lda     #$80                ; TestCmd can ever route here, so the
+        sta     call_ptr+1            ; CmdBankTab/CmdSlotLoTab index lookup
+        jsr     BAS_CHRGET              ; this used to do (table entries of
+        lda     #1                        ; exactly one) was pure overhead -
+                                             ; hardcoded directly instead.
+                                             ; Bank number (1) loaded AFTER
+                                             ; CHRGET, not before/PHA'd across
+                                             ; it - nothing here needs A to
+                                             ; survive the call, so there's
+                                             ; nothing to preserve.
         jmp     bank_call       ; JMP, not JSR - the command body ends via
                                  ; bank_return_basic, which resumes BASIC
                                  ; directly (JMP BAS_NEWSTT) and never
@@ -406,13 +464,6 @@ OkNew
                                  ; actually behind "CLS reopens the menu"
                                  ; and "HEX locks up": two different
                                  ; garbage jump targets from the same bug.
-
-; one bank number and one slot address per token, in token order
-; starting at CMDSTART (index 0 = CLS = $CC, the only direct token now).
-CmdBankTab
-        !byte   1               ; CLS  -> bank 1
-CmdSlotLoTab
-        !byte   <SLOT_CLS
 
 ; Extended-command dispatch: ExecuteCommand's initial CHRGET already
 ; consumed EXTTOK itself (that's what TestCmd just matched); one more
@@ -503,8 +554,9 @@ ExtBankTab
         !byte   6, 6, 6                 ; CARTINFO BANKS BANK
         !byte   8, 8, 8, 8, 8           ; SOUND VOLUME WAVE ADSR FILTER
         !byte   9, 9, 9                 ; FLASHERASE FLASHLOAD FLASHVERIFY
-        !byte   10, 10, 10, 10, 10, 10, 10, 10 ; DIR DEVICE CD DELETE DEL
-                                                  ; RENAME DLOAD DSAVE
+        !byte   10, 10, 10, 10, 10, 10, 10, 10, 10 ; DIR DEVICE CD DELETE
+                                                  ; DEL RENAME DLOAD DSAVE
+                                                  ; MLOAD
         !byte   11, 11                  ; HTTPGET TELNET
         !byte   0                       ; JET - replays the boot flyby;
                                           ; bank 0, same bank tower_anim_
@@ -525,7 +577,7 @@ ExtSlotLoTab
         !byte   <SLOT_FLASHERASE, <SLOT_FLASHLOAD, <SLOT_FLASHVERIFY
         !byte   <SLOT_DIR, <SLOT_DEVICE, <SLOT_CD, <SLOT_DELETE
         !byte   <SLOT_DELETE                    ; DEL - same slot as DELETE
-        !byte   <SLOT_RENAME, <SLOT_DLOAD, <SLOT_DSAVE
+        !byte   <SLOT_RENAME, <SLOT_DLOAD, <SLOT_DSAVE, <SLOT_MLOAD
         !byte   <SLOT_HTTPGET, <SLOT_TELNET
         !byte   <SLOT_JET
         !byte   <SLOT_REBOOT
@@ -1928,6 +1980,8 @@ ExtTab
         !byte   'D'+$80
         !text   "DSAV"
         !byte   'E'+$80
+        !text   "MLOA"
+        !byte   'D'+$80
         !text   "HTTPGE"
         !byte   'T'+$80
         !text   "TELNE"

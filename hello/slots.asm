@@ -14,13 +14,32 @@
 ; resident.asm's dispatch tables store (bank, slot) pairs using these
 ; constants - never a raw label - since that's the only address that's
 ; guaranteed valid before the slot's own bank is even switched in. ---
+; Resident kernel start - the boundary between bank-specific content
+; ($8000-RESIDENT_START) and resident.asm (RESIDENT_START-$9FFF,
+; identical in every bank - see resident.asm's own header for why).
+; Widened four times now as resident.asm grew: 1024 -> 2048 -> 2112 ->
+; 2240 -> 2248 bytes (this boundary: $9740 -> $9738 - DOWN, not up: this
+; boundary is bank-content's ceiling and resident.asm's floor, so giving
+; resident.asm more room means DECREASING this value, not increasing it
+; - got this backwards on the first attempt, confirmed by the overflow
+; growing from 2 to 10 bytes when tried the wrong direction first). The
+; 8 bytes taken for that were for a since-removed "ShortTab" mechanism
+; ($/%/back-arrow as bare single-byte tokens) that turned out to be
+; unsafe at a much deeper level (see resident.asm's own note where
+; EXTTOK/EXTFUNCTOK are defined) and was pulled back out entirely -
+; resident.asm now has ~139 bytes of slack before $a000 at this same
+; boundary value, deliberately left as-is (not narrowed back) rather
+; than re-tune it yet again for a few dozen bytes of bank-content
+; headroom nobody's asked for.
+RESIDENT_START = $9738
+
 SLOT_BASE = $8010
 SLOT_SIZE = 4
-SLOT_COUNT = 61              ; bumped from 60 when Bank 15's
-                               ; SLOT_FEAT_DISPATCH needed a 61st slot
-                               ; (see that constant's own comment) -
-                               ; every bank content file's own
-                               ; "!fill BANK_CONTENT_START-*, $ff" /
+SLOT_COUNT = 62              ; bumped from 61 when Bank 16's
+                               ; SLOT_SPRITE_EDITOR_DISPATCH needed a
+                               ; 62nd slot (see that constant's own
+                               ; comment) - every bank content file's
+                               ; own "!fill BANK_CONTENT_START-*, $ff" /
                                ; "*=BANK_CONTENT_START" pair picks this
                                ; up automatically, so bumping this one
                                ; constant is the whole change needed
@@ -34,6 +53,18 @@ SLOT_MENU_OPEN        = SLOT_BASE + 0*SLOT_SIZE  ; bank 14 - see that
                                                     ; bank_calls here
                                                     ; with A=14, not 0
 SLOT_CLS              = SLOT_BASE + 1*SLOT_SIZE  ; bank 1
+
+; Slot 3 (gap between SLOT_CLS and SLOT_COLOR) used to hold a C=+RUN/
+; STOP auto LOAD"*",8,1+RUN trigger - backed out after confirming live
+; (hang, then separately confirmed memory corruption - CstopTypeCmd's
+; own 16-character auto-type string overran the real 10-byte keyboard
+; buffer into $0281-$0286, corrupting KERNAL variables including the
+; current text color at $0286) that a 16-character string doesn't fit
+; the keyboard-buffer-injection trick safely without a proper save/
+; restore-on-drain mechanism this attempt didn't have. Gap left free
+; again for whatever's next - see git history around this comment if
+; picking the feature back up, with that fix designed in from the
+; start next time.
 
 ; --- SCREEN + HELP (bank 1) ---
 SLOT_COLOR            = SLOT_BASE + 2*SLOT_SIZE
@@ -172,25 +203,55 @@ SLOT_FASTDLOAD        = SLOT_BASE + 58*SLOT_SIZE  ; bank 13
 ; room; they had no real content to preserve either way. ---
 SLOT_JET_CHARSET_SETUP = SLOT_BASE + 59*SLOT_SIZE  ; bank 14
 
-; --- Menu Features (bank 15) - feat_sid_demo/feat_sprite_editor/feat_
-; cia_monitor/feat_vic_viewer/feat_memory_viewer/feat_joystick_tester
-; (features.asm/spriteeditor.asm, plus bitmap.asm which features.asm's
-; own graphics demo calls into directly) split off from Bank 14 the
-; moment it turned out common.asm + all four of those files together
-; still didn't fit in one 8K bank even after Bank 0's jet_charset_setup
-; moved in too - see bank14_content.asm's own header for the numbers.
-; menu_dispatch_num/menu_diag_dispatch_num (common.asm) reach every
-; feature here through this ONE slot rather than getting a slot each:
-; num_val (already the shared "which item" variable both of those
-; dispatch loops use) doubles as the argument, set to one of the FEAT_*
-; constants below immediately before the bank_call, and feat_dispatch
-; (bank15_content.asm) reads it back out to route to the right feat_*
-; routine internally via a plain same-bank JSR. One slot now covers
-; however many feature routines Bank 15 ends up holding, current or
-; future, instead of needing a new slot (and touching every bank
-; content file's own BANK_CONTENT_START boundary again) every time
-; another one gets added.
+; --- Menu Features (bank 15) - feat_sid_demo/feat_cia_monitor/feat_
+; vic_viewer/feat_memory_viewer/feat_joystick_tester (features.asm,
+; plus bitmap.asm which features.asm's own graphics demo calls into
+; directly) split off from Bank 14 the moment it turned out common.asm
+; + all those files together still didn't fit in one 8K bank even
+; after Bank 0's jet_charset_setup moved in too - see bank14_content.
+; asm's own header for the numbers. menu_dispatch_num/menu_diag_
+; dispatch_num (common.asm) reach every feature here through this ONE
+; slot rather than getting a slot each: num_val (already the shared
+; "which item" variable both of those dispatch loops use) doubles as
+; the argument, set to one of the FEAT_* constants below immediately
+; before the bank_call, and feat_dispatch (bank15_content.asm) reads it
+; back out to route to the right feat_* routine internally via a plain
+; same-bank JSR (or, for FEAT_SPRITE_EDITOR specifically, a NESTED
+; bank_call into Bank 16 - see SLOT_SPRITE_EDITOR_DISPATCH below for
+; why that one's different). One slot now covers however many feature
+; routines Bank 15 ends up holding, current or future, instead of
+; needing a new slot (and touching every bank content file's own
+; BANK_CONTENT_START boundary again) every time another one gets added.
 SLOT_FEAT_DISPATCH    = SLOT_BASE + 60*SLOT_SIZE  ; bank 15
+
+; --- Sprite Editor (bank 16) - relocated out of Bank 15 once the
+; CARTRIDGE LAB port needed the room (see FIRST_USER_BANK's own comment
+; below for the bank-numbering ripple this caused). Gets its OWN slot
+; rather than folding into SLOT_FEAT_DISPATCH's shared-slot pattern:
+; that pattern only works when the target bank is already Bank 15 (its
+; own feat_dispatch does the internal same-bank routing) - a feature
+; living in a genuinely different bank needs its own real bank_call
+; target. feat_dispatch's own FEAT_SPRITE_EDITOR case (bank15_content.
+; asm) does a nested bank_call here instead of a same-bank JSR;
+; resident.asm's bank_call/bank_return are already reentrant/stack-
+; based specifically so this kind of nesting is safe. ---
+SLOT_SPRITE_EDITOR_DISPATCH = SLOT_BASE + 61*SLOT_SIZE  ; bank 16
+
+; --- %FILENAME (ML load shortcut, bank 10 - same bank as DLOAD/DSAVE/
+; DIR it sits alongside). Reuses slot 4, one of a handful of gaps left
+; unlabeled between SLOT_COLOR(2)/SLOT_LOCATE(5), SLOT_JOYFIRE(25)/
+; SLOT_DUMP(27), and SLOT_MOVE(29)/SLOT_FIND(31) - confirmed genuinely
+; free via "grep -rn SLOT_BASE *.asm" outside this file returning
+; nothing, meaning no bank content or dispatch table computes a raw
+; slot address any way other than through these named constants, so an
+; unlabeled gap really is unused, not silent reserved headroom. Chosen
+; over a brand new slot past 59 (would have needed slot 62, the first
+; one past $80FF - see OkExt/resident.asm's own hardcoded call_ptr+1=
+; $80 assumption) purely for resident.asm's own tight budget: giving
+; OkExt a real per-entry high-byte table (or even a single-slot special
+; case) to handle one slot living on a different page cost more bytes
+; than resident.asm had to spare; reusing an in-range gap needs neither. ---
+SLOT_MLOAD             = SLOT_BASE + 4*SLOT_SIZE  ; bank 10
 
 FEAT_SID              = 1
 FEAT_SPRITE_EDITOR    = 2
@@ -198,6 +259,17 @@ FEAT_CIA              = 3
 FEAT_VIC              = 4
 FEAT_MEMORY           = 5
 FEAT_JOYSTICK         = 6
+FEAT_EPROM_DUMP       = 7
+FEAT_READ_CHIP        = 8
+FEAT_BACKUP_EPROM     = 9
+FEAT_BANK_SCANNER     = 10  ; CARTRIDGE LAB - bank latch test, ported
+                              ; from cartlab.asm's own do_bank_test
+FEAT_VERIFY_EPROM     = 11  ; CARTRIDGE LAB - directory-picker verify,
+                              ; ported from cartlab.asm's VERIFY/COMPARE
+FEAT_LOAD_EPROM       = 12  ; CARTRIDGE LAB - directory-picker load,
+                              ; ported from cartlab.asm's LOAD FILE TO RAM
+FEAT_SEARCH_ROM       = 13  ; CARTRIDGE LAB - byte-pattern search across
+                              ; every physical EPROM bank
 ;
 ; install_basic_ext itself does NOT get a slot - unlike menu_open (real
 ; per-bank content in Bank 14) or ClsCmd/HexCmd (real per-bank content
@@ -394,6 +466,31 @@ renum_len             = $03b3   ; 2 bytes: final rebuilt-program length,
 dv_tmp_lo             = $03b5
 dv_tmp_hi             = $03b6
 
+; --- feat_eprom_dump's own browse state (bank 15) - persists across
+; SPACE/N page/bank advances for as long as that screen stays open, so
+; it behaves like a real memory browser instead of resetting every
+; keypress. Not zero page - no indirect addressing needed here either;
+; the actual live read happens through rd_addr/rd_count (resident.asm,
+; same physical bytes as features.asm's hd_addr/hd_count) once bank_call
+; has switched the target bank in. ---
+eprom_bank            = $03b7   ; which bank (0..TOTAL_BANKS-1) is shown
+eprom_offset          = $03b8   ; 2 bytes: byte offset into that bank's
+                                  ; own $8000-$9FFF window
+eprom_read_done       = $03ba   ; 0 until CARTRIDGE LAB's READ CHIP
+                                  ; (feat_read_chip) successfully
+                                  ; captures a page - EPROM DUMP checks
+                                  ; this before offering to browse, per
+                                  ; the CARTRIDGE LAB workflow: read
+                                  ; first, then dump what was read
+pct_acc               = $03bb   ; 2 bytes: feat_backup_eprom's SAVE
+                                  ; progress - an 8.8 fixed-point
+                                  ; accumulator, not a plain percentage;
+                                  ; same technique and reasoning as
+                                  ; cartlab.asm's own pct_acc (standalone
+                                  ; program, separate zero-page copy -
+                                  ; this one isn't zero page since
+                                  ; nothing here needs indirect
+                                  ; addressing through it)
 ; --- RENUM's own zero-page pointers (bank 1) - only ever touched during
 ; RENUM's own SEI-held, no-nested-BASIC-calls rebuild loop (the one
 ; exception, real BASIC ROM's LINKPRG at $a533, isn't called until
@@ -438,24 +535,52 @@ EASYFLASH_8K_MODE = $06         ; MEMCTRL|EXROM - BASIC ROM stays visible
 ; here when adding another bank.
 TOTAL_BANKS = 22
 
+; --- How many banks the CURRENTLY INSTALLED chip actually has - a
+; separate question from TOTAL_BANKS above, which is how many banks
+; this firmware BUILD defines regardless of what chip it ends up on.
+; feat_eprom_dump (features.asm) pages through this many banks, not
+; TOTAL_BANKS: on the Phase 0 test board (docs/HARDWARE_PLATFORM.md)
+; with its default 27C512 (64KB = exactly 8 banks of 8KB), the bank-
+; select latch only has enough real address lines wired for 8 banks -
+; paging past bank 7 doesn't reach new content, it just aliases/wraps
+; back onto banks 0-7 again. Bump this (8/16/32/64) when a larger chip
+; family is actually installed - see the board's own PIN1/PIN31/
+; 28PIN-32PIN jumper table for which chip maps to which bank count. No
+; way to auto-detect this from software: it depends on which physical
+; chip and jumper setting is in the socket right now, not anything the
+; C64 side can query (the JEDEC ID that could infer capacity needs 12V
+; on A9 for classic 27Cxxx parts - see id_read_chip's own comment,
+; features.asm - so it's a real UNKNOWN, not a detectable one, for
+; exactly the chip family this constant most needs to be right for).
+EPROM_PHYSICAL_BANKS = 8
+
+; pct_acc's per-page step, in 8.8 fixed point: 100*256/(EPROM_PHYSICAL_
+; BANKS*64 pages) - same formula and same "exact for 8/16, truncates for
+; 32/64" caveat as cartlab.asm's own PCT_STEP (standalone program,
+; separate constant - this is bank 15/features.asm's copy).
+PCT_STEP = 25600/(EPROM_PHYSICAL_BANKS*64)
+
 ; First bank in the genuinely user-programmable range (games, utilities,
 ; ROM images, custom software - anything a user flashes themselves).
 ; Banks below this are the protected "system" range (boot/menu, all
 ; BASIC+ extension categories, the FastLoader, and - eventually - real
 ; flash-programming logic in bank 9, still stubbed for now): boot ROM
 ; (0), BASIC extensions (1-11), reserved for the later SERIAL plan (12),
-; FastLoader (13), F1 Cart Menu (14), Menu Features (15 - inserted right
-; after 14 rather than tacked onto the end, same reasoning as 14 itself
-; already followed: keeps "bank >= FIRST_USER_BANK" a single boundary
-; check instead of a non-contiguous protected range). The previously-
-; empty user-programmable banks shift up by one again (15-20 -> 16-21)
-; to make room - same as the last time this happened, they had no real
-; content to preserve. This is a software-level convention only -
-; EasyFlash's flash chip has no wired-up hardware write-protect pin -
-; so it only means anything once real flash-write code exists (the
-; still-stubbed CARTRIDGE LAB submenu, common.asm) and actually checks
-; against it before writing; nothing enforces it yet.
-FIRST_USER_BANK = 16
+; FastLoader (13), F1 Cart Menu (14), Menu Features (15), Sprite Editor
+; (16 - moved here out of Bank 15 once the CARTRIDGE LAB port needed
+; the room; kept contiguous with the rest of the system range rather
+; than tacked onto the end, same "bank >= FIRST_USER_BANK" single-
+; boundary reasoning as every earlier addition here). Bumped from 16 to
+; 17 - the user-programmable range simply shrinks by one (17-21 instead
+; of 16-21) rather than shifting every other user bank up again; unlike
+; the last two times this boundary moved, none of 16-21 had real
+; content to preserve, so there's nothing to renumber. This is a
+; software-level convention only - EasyFlash's flash chip has no
+; wired-up hardware write-protect pin - so it only means anything once
+; real flash-write code exists (the still-stubbed CARTRIDGE LAB
+; submenu, common.asm) and actually checks against it before writing;
+; nothing enforces it yet.
+FIRST_USER_BANK = 17
 
 ; --- zero-page save/restore span (unchanged from the single-bank
 ; design - common.asm/ultimate_sdk.asm/features.asm/bitmap.asm's
@@ -504,3 +629,93 @@ dir_name_has_dot = $c828   ; nonzero if the name already contains a "."
 ; disk command ever runs at a time" reasoning as dir_namebuf etc. above
 ; makes this reuse-safe.
 fastload_error   = $c829
+
+; --- feat_eprom_dump's (bank 15) 128-byte page buffer - resident_copy_
+; page (resident.asm) fills this from the target bank's own $8000-$9FFF
+; window during a bank_call, since that window shows OUR content again
+; the instant bank_return switches back to bank 15. Placed right after
+; fastload_error rather than in scr_save_buf/col_save_buf/misc_save_buf's
+; own window: unlike DISK's buffers above, this one is live WHILE the F1
+; menu is open (it IS an F1 menu screen), the exact window where those
+; three buffers hold real, in-use backup data - so it can't share their
+; space the way RENUM_BUF safely does. $c82a-$c8ff is free either way
+; (DISK commands, whose buffers start at $c900, can't run while the F1
+; menu is open, so nothing else competes for it during this screen). ---
+eprom_page_buf   = $c82a
+
+; --- id_read_chip's (bank 15, features.asm) RAM landing spot for its
+; copied JEDEC-unlock/ID-read routine - has to actually execute from
+; RAM, not ROM: issuing the unlock sequence puts the WHOLE flash chip
+; (this bank's own code included, since it's the same physical chip)
+; into autoselect mode, where reads return ID bytes instead of normal
+; instruction bytes, so the CPU can't safely keep fetching its own next
+; opcode from $8000-$9FFF while that's happening - verified against
+; EasyFlash's own real EAPI driver (eapi-am29f040.s, skoe.de), which
+; copies its flash-write code to RAM at $DF80 for the same reason. Right
+; after eprom_page_buf's 128 bytes ($c82a-$c8a9), still well clear of
+; filename_buf at $c900 - same "F1 menu open, so DISK's buffers can't be
+; live right now" reasoning eprom_page_buf's own comment already covers.
+id_read_ram      = $c8aa
+
+; --- feat_bank_scanner's (bank 15, features.asm) reference-row scratch -
+; bank 0's own first 8 bytes, kept around to compare every later bank
+; against. Same "$c82a-$c8ff free during the F1 menu" window eprom_
+; page_buf/id_read_ram already use - placed at $c8f0, comfortably past
+; id_read_ram's own ~39-byte copied routine (id_read_template) and
+; still short of filename_buf at $c900. ---
+bt_ref           = $c8f0
+
+; --- VERIFY EPROM / LOAD EPROM TO RAM's (bank 15, features.asm) shared
+; directory-picker state - same design as cartlab.asm's own lr_* (LOAD
+; FILE TO RAM/VERIFY-COMPARE picker), ported here since the CARTRIDGE
+; LAB port needed the same "pick a file from a real directory listing"
+; UI. Reuses filename_buf/filename2_buf/dir_buffer's own $c900-$cfff
+; window (1792 bytes) - safe on the same "F1 menu open, so DISK's
+; buffers can't be live right now" grounds eprom_page_buf/id_read_ram
+; already rely on. LR_MAX_FILES is smaller than cartlab.asm's own 64
+; (24 here) purely to keep this window's footprint modest next to
+; everything else already sharing it. ---
+LR_RAW_BUF    = $c900        ; 1024 bytes: raw "$" directory listing
+                                ; scratch, same purpose as DISK's own
+                                ; dir_buffer (bank 10) - not shared with
+                                ; it directly since bank 10 can't run
+                                ; while the F1 menu (bank 15) is open,
+                                ; but a distinct address avoids any
+                                ; confusion between the two
+LR_MAX_FILES  = 24
+LR_ROWS       = 16           ; visible rows per screen page
+LR_NAME_LEN   = 17            ; 16 chars (CBM DOS's own filename limit)
+                                ; + 1 null terminator
+LR_NAME_TABLE = $cd00         ; LR_MAX_FILES*LR_NAME_LEN = 408 bytes
+LR_MODE_LOAD   = 0
+LR_MODE_VERIFY = 1
+lr_count      = $ce98
+lr_cursor     = $ce99
+lr_top        = $ce9a
+lr_mode       = $ce9b
+lr_fn_len     = $ce9c        ; selected entry's name length once copied
+                                ; into filename_buf (reused directly for
+                                ; this, same buffer DELETE/RENAME/CD/
+                                ; DLOAD/DSAVE already use - F1-menu-safe
+                                ; on the same grounds as everything else
+                                ; in this window)
+lr_rd_seen_header = $ce9d    ; lr_read_dir's own "have we skipped the
+                                ; disk-name/ID header entry yet" flag
+lr_del_cmd    = $ce9e         ; 18 bytes: "S:" (2) + up to 16 chars for
+                                ; DEL's own S:name scratch command, same
+                                ; layout as cartlab.asm's own lr_del_cmd -
+                                ; still well clear of LR_NAME_TABLE's own
+                                ; $cd00-$ce98 span and $cfff's own ceiling
+
+; --- SEARCH ROM's (bank 15, features.asm) own scratch, same $c900-$cfff
+; window and "F1 menu open" sharing rule as the picker's own state above
+; - SEARCH ROM and the picker never run concurrently either. The typed
+; hex-digit string itself reuses filename_buf/lr_fn_len directly (see
+; feat_search_rom's own comment), so only the converted byte pattern
+; needs a home here. ---
+sr_pattern    = $ceb0         ; 8 bytes: converted search pattern
+sr_pat_len    = $ceb8         ; pattern length in bytes (0 = cancelled)
+sr_found      = $ceb9         ; nonzero once any match has been reported
+sr_y_save     = $ceba         ; sr_byte_loop's own saved page-index (Y
+                                ; gets clobbered by sr_try_match/sr_
+                                ; report_match's own print_str calls)

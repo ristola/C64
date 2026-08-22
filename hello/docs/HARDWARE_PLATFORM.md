@@ -2,7 +2,7 @@
 
 **Status: decided direction, in progress.** This document describes a from-scratch custom cartridge PCB (built around an AM29F080B flash chip) that **supersedes** the EasyFlash-format build described in `ARCHITECTURE.md` as the shipping target. The existing EasyFlash `.crt` work remains valuable as proven technique (fixed-slot jump tables, cross-bank calling, the BASIC-extension hooks) — it just isn't the same physical cartridge going forward.
 
-Decided 2026-07-31. **Superseded in part on 2026-08-10** when `EEPLD/SUPER_CART_R01.PLD` (the actual compiled GAL source, real project ground truth) turned out to use a different memory-map and banking approach than the one originally planned below — see "GAL-based redesign (2026-08-10)" note inside each affected section. KiCad schematic capture for this board lives in `hardware/supercart/` (see that folder's own files for verified chip pinouts).
+Decided 2026-07-31. **Superseded in part on 2026-08-10** when `EEPLD/SUPER_CART_R01.PLD` (the actual compiled GAL source, real project ground truth) turned out to use a different memory-map and banking approach than the one originally planned below — see "GAL-based redesign (2026-08-10)" note inside each affected section. **Superseded further on 2026-08-21** (PLD rev 0.2): cartridge mode is now a confirmed, permanent decision — hardwired static 8K (`/EXROM`=GND, `/GAME`=high on the PCB, not GAL signals), not the Ultimax-boot-then-switch scheme described lower in this doc; and the bank register is now real registered logic (not the rev 0.1 "forced to 0" placeholder), with a `WRITE_ARM` safety latch gating flash `/WE`. See "GAL bank/control assignment (ATF22V10C, rev 0.2)" below. KiCad schematic capture for this board lives in `hardware/supercart/` (see that folder's own files for verified chip pinouts).
 
 ## Why a platform, not just a cartridge
 
@@ -123,24 +123,35 @@ KiCad schematic capture (verified pinouts for both ICs plus the C64 44-pin edge 
 
 ## Boot architecture
 
+**Superseded 2026-08-21 by the static-8K decision** (see "GAL bank/control assignment (ATF22V10C, rev 0.2)" above) — this whole section describes an Ultimax-boot-then-switch scheme that was considered but not built. The real board never enters Ultimax mode at all: `/EXROM`/`/GAME` are hardwired on the PCB, there is no mode-switching bootloader, and boot works the same way as the Phase 0 test board's Magic-Desk mode (see above) — the KERNAL's own reset vector runs directly and does its CBM80-autostart check. Kept below for the addressing/reasoning history, since the *bank* (as opposed to *mode*) register logic it describes is now real (rev 0.2).
+
 The AM29F040B itself has no concept of Ultimax/16K/8K mode — that's purely a function of what drives the C64 cartridge port's `GAME`/`EXROM` pins, independent of which chip supplies ROM data.
 
 **Verified fact** (from `cartconv`'s own report on the built EasyFlash `.crt`): `exrom: 1 game: 0` = Ultimax. In this project's convention, "asserted" = driven low (`0`); so **Ultimax = `EXROM` deasserted (high/`1`), `GAME` asserted (low/`0`)**. Cross-check this against `EasyFlash-ProgRef.pdf`/`EasyFlash-AppSupport.pdf` before finalizing a schematic — those are the actual EasyFlash reference docs, not just this project's own reverse-engineering.
 
-### GAL bank/control assignment (ATF22V10C, `SUPER_CART_R01.PLD` rev 0.1) — supersedes the 74HCT273/574 Q0-Q7 scheme below
+### GAL bank/control assignment (ATF22V10C, `SUPER_CART_R01.PLD` rev 0.2) — supersedes both rev 0.1 and the 74HCT273/574 Q0-Q7 scheme below
 
-The section below (Q0-Q7 latch bits, `GAME`/`EXROM` auto-Ultimax trick) described the *originally planned* discrete-logic board and is kept for its still-relevant reasoning, but the real PLD does not implement it. Verified pin map, from the PLD's own comments (24-pin SOIC, pins 12/24 = GND/VCC):
+**Cartridge mode decided 2026-08-21: static 8K, permanently.** There is no Ultimax boot phase and no mode-switching bootloader in this design — `/EXROM` is tied directly to GND and `/GAME` directly to +5V on the PCB (neither is a GAL signal, neither is software-controlled). This is a deliberate abandonment of the Ultimax-boot-then-switch plan described later in this doc, not an oversight — that whole plan (the 74HCT273 auto-Ultimax trick, the four-mode GAME/EXROM table, the "persistent configuration in flash" bootloader sequence) is kept below only as historical reasoning for a discrete-logic board that was never built. All 10 of the ATF22V10C's I/O macrocells are used, per the PLD's own header comment:
 
-| PLD pin(s) | Signal | Wiring |
-|---|---|---|
-| 14-20 (`BANK0`-`BANK6`) | 7 bits → flash `A13`-`A19` **directly**, one-to-one | 128 banks × 8KB = 1MB, matching the AM29F080B. **This is 8KB banks, not the originally-planned 16KB banks** — no ROML/ROMH-derived A13 strobe is used; flash `A[12:0]` connects straight to the C64's own `A[12:0]` instead (see `hardware/supercart/` schematic, net map `A0`-`A12`). |
-| 21-23 (`CTRL0`-`CTRL2`) | Reserved, undefined | Rev 0.1 forces these to `0` as a first bring-up test (per the PLD's own "REV 0.1 TEST LOGIC" comment) — **no bank switching or mode control is implemented yet.** `CTRL1` is commented "Flash write control / safety" as a *candidate*, not a decision. |
-| 1 (`PHI2`), 10 (`IO1_N`), 11 (`RW`), 13 (`RESET_N`) | C64 bus inputs | Standard control inputs to the GAL's decode logic |
-| 2-9 (`D0`-`D7`) | C64 data bus | Read by the GAL, presumably for a future unlock/write-control command decode (not yet implemented — see `CTRL1` above) |
+| PLD pin(s) | Signal | Type | Wiring |
+|---|---|---|---|
+| 14-20 (`BANK0`-`BANK6`) | 7 bits → flash `A13`-`A19` directly, one-to-one | Registered | 128 banks × 8KB = 1MB, matching the AM29F080B. Flash `A[12:0]` connects straight to the C64's own `A[12:0]` (see `hardware/supercart/` schematic, net map `A0`-`A12`) — no ROML/ROMH-derived strobe. |
+| 23 (`WRITE_ARM`) | Flash-write-safety latch bit | Registered | **Not routed externally on the PCB** — a real macrocell, used only internally to gate `FLASH_WE_N`. |
+| 21 (`FLASH_OE_N`, was `CTRL0`) | → Flash `/OE` | Combinational | `FLASH_OE_N = !RW` — asserted only during a C64 read. |
+| 22 (`FLASH_WE_N`, was `CTRL1`) | → Flash `/WE` | Combinational | `FLASH_WE_N = !(WRITE_ARM & !RW & PHI2)` — asserted only when armed, during a write, on PHI2's high phase. A 10kΩ pull-up (R1) holds this high (write-protected) any time the GAL isn't actively driving it. |
+| 1 (`PHI2`), 10 (`IO1_N`), 11 (`RW`), 13 (`RESET_N`) | C64 bus inputs | Input | Clock and qualifying signals for the bank register below. |
+| 2-9 (`D0`-`D7`) | C64 data bus | Input | Latched into `BANK0`-`BANK6`/`WRITE_ARM` on a qualifying `$DE00` write. |
 
-**Open/not yet implemented in the GAL:** there is no `GAME`/`EXROM` output on the ATF22V10C at all in rev 0.1 — the original "auto-forces Ultimax on power-up via the latch's `MR` default state" trick (below) assumed a 74HCT273 that no longer exists in this design. Cartridge-mode control (Ultimax/8K/16K) needs to be redesigned around the GAL — either as future `CTRL0`-`CTRL2` outputs, or some other mechanism. Until then, GAME/EXROM/ROML/ROMH on the cartridge edge connector are unconnected in the schematic (labeled `TBD_GAME_N`, `TBD_EXROM_N`, `TBD_ROML_N`, `TBD_ROMH_N`).
+`/ROML` from the cartridge edge connector drives flash `/CE` **directly on the PCB** — it is not a GAL pin at all and does not route through the ATF22V10C.
 
-### Originally-planned latch bit assignment (74HCT273/574, Q0-Q7) — NOT what the real PLD implements; kept for the Ultimax-on-power-up reasoning
+**Bank register + write-arm behavior:** on each `PHI2` rising edge, if the C64 is writing while `/IO1` is asserted (a `$DE00` write), the GAL latches `BANK0..BANK6 <= D0..D6` and `WRITE_ARM <= D7`; otherwise all eight bits hold their previous value (feedback, since the 22V10 has no dedicated clock-enable pin). `/RESET` asynchronously clears all eight bits to 0, so the cartridge always comes back up on bank 0 with flash writes disabled. Software interface (`$DE00` = 56832 decimal):
+
+- `POKE 56832, 0..127` — select bank 0-127, flash writes stay disabled (D7=0)
+- `POKE 56832, 128..255` — select bank `(value AND 127)`, flash writes **armed** (D7=1)
+
+See `EEPLD/SUPER_CART_R01.PLD` itself for the full CUPL equations and reasoning (dated, so future revisions won't overwrite this history).
+
+### Originally-planned latch bit assignment (74HCT273/574, Q0-Q7) — NOT what the real PLD implements (superseded twice: first by the GAL redesign, then by the static-8K decision); kept only as historical reasoning
 
 | Bits | Signal | Wiring |
 |---|---|---|
@@ -166,8 +177,11 @@ Checked against all four real GAME/EXROM modes:
 
 - `Flash A[19:13] = BANK[6:0]` — from the GAL's `BANK0`-`BANK6` outputs directly, **8KB granularity**
 - `Flash A[12:0] = C64 A[12:0]` straight through (no ROML/ROMH-derived strobe)
+- `Flash /CE` = C64 `/ROML`, wired directly on the PCB (not through the GAL)
+- `Flash /OE` = GAL `FLASH_OE_N` = `!RW` (asserted only on a C64 read)
+- `Flash /WE` = GAL `FLASH_WE_N` = `!(WRITE_ARM & !RW & PHI2)` (asserted only when armed via `$DE00` bit 7, during a write, on PHI2 high); a 10kΩ pull-up (R1, PCB) holds it deasserted/write-protected by default
 
-This is a real change from the originally-planned scheme below, not a compatible reproduction of it — 8KB banks are half the size of the 16KB banks `build_cart.sh` currently produces, so **the existing flash image format does *not* carry over unchanged**; the ROM build/packaging step needs rework to match, in addition to the bank-register address and bootloader mode-switching sequence.
+This is a real change from the originally-planned scheme below, not a compatible reproduction of it — 8KB banks are half the size of the 16KB banks `build_cart.sh` currently produces, so **the existing flash image format does *not* carry over unchanged**; the ROM build/packaging step needs rework to match, in addition to the bank-register address. (No bootloader mode-switching sequence applies — cartridge mode is now hardwired static 8K, not software-selected; see "Boot architecture" above.)
 
 **Originally planned (NOT current):**
 
@@ -186,6 +200,8 @@ Considered decoupling the latch from `/RESET` (via a separate power-on-reset cir
 
 ### Where persistent configuration actually lives
 
+**Superseded 2026-08-21** — this section's premise (mode reprogrammed by a bootloader on every boot) doesn't apply now that cartridge mode is hardwired static 8K. Bank selection still isn't persistent across a reset by design (see "bank register + write-arm behavior" above: `/RESET` clears `BANK0-6`/`WRITE_ARM` to 0, always coming back up on bank 0 with flash writes disabled) — kept below for the general "don't persist selectable state in the register itself" reasoning, which still holds.
+
 Not in the latch — in flash (or the `$DF02` EEPROM), which is already non-volatile. Boot sequence:
 
 1. Power-on / `/RESET` → hardware forces Ultimax (fixed, per the table above).
@@ -203,11 +219,17 @@ The currently-working cartridge (`ARCHITECTURE.md`) targets real EasyFlash hardw
 
 ## Open items
 
-- GAL logic for flash `/CE`, `/OE`, `/WE` (currently unconnected/`TBD_FLASH_*` in the schematic).
-- GAL logic (or other mechanism) for `GAME`/`EXROM`/`/ROML`/`/ROMH` — cartridge-mode control has no implementation at all in the GAL yet; the original 74HCT273-based "auto-Ultimax-on-power-up" trick doesn't apply as-is.
-- `CTRL0`-`CTRL2` function (rev 0.1 forces them to `0`; `CTRL1` is only a *candidate* for flash write-safety).
+Resolved as of PLD rev 0.2 / 2026-08-21 (kept struck through for history, not removed, since earlier text in this doc still references them as open):
+
+- ~~GAL logic for flash `/CE`, `/OE`, `/WE`~~ — done. `/CE`=`/ROML` (direct on PCB, not through the GAL), `/OE`/`/WE` are real GAL equations (see "GAL bank/control assignment (ATF22V10C, rev 0.2)" above).
+- ~~GAL logic (or other mechanism) for `GAME`/`EXROM`~~ — resolved by decision, not implementation: both are hardwired on the PCB (static 8K), not GAL signals at all.
+- ~~`CTRL0`-`CTRL2` function~~ — resolved: renamed `FLASH_OE_N`/`FLASH_WE_N`/`WRITE_ARM` with real logic.
+- Board mechanical dimensions (AM29F080B SO-44 footprint, C64 edge-connector goldfinger spec) — resolved by tracing the real `hardware/TestBoard/EpyxFastLoad.kicad_pcb` reference board; `hardware/supercart/` is now a fully routed, DRC-clean board with Gerbers exported.
+
+Still open:
+
 - Since banks are now 8KB (not 16KB), `build_cart.sh`'s ROM image packaging needs rework to match — it currently produces 16KB (8K ROML + 8K ROMH) per bank.
-- $DFxx register-select strobe derivation from `/IO2` — not used by the PLD at all yet (only `/IO1` is read, per the PLD's own header comment); the whole `$DF00`-`$DFFF` register map above is still aspirational, not wired to anything.
-- Flash/EEPROM config-block layout the bootloader reads.
+- `$DFxx` register-select strobe derivation from `/IO2` — not used by the PLD at all yet (only `/IO1` is read, per the PLD's own header comment); the whole `$DF00`-`$DFFF` register map above is still aspirational, not wired to anything.
+- `/ROMH` (edge connector pin B) still undefined/unconnected — not needed for static 8K mode, left open in case that changes (per PLD's own "NEXT REVISION (0.3)" note).
+- Flash `RY/BY#` (pin 28) not read by the GAL at all yet (per PLD's own "NEXT REVISION (0.3)" note).
 - Whether/how the existing 13-bank EasyFlash content maps onto the new Boot/BASIC/Networking/Utilities/Diagnostics/Games/DevTools bank scheme.
-- Board mechanical dimensions (AM29F080B SO-44 footprint, C64 edge-connector goldfinger spec) — not yet verified, blocking PCB layout/autorouting/Gerbers in `hardware/supercart/`.

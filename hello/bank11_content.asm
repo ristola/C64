@@ -190,13 +190,33 @@ HttpGetCmd
         ; own null-terminator check would hit immediately at index 1,
         ; printing at most one garbage byte and stopping - exactly what
         ; "HTTPGET printed nothing" on real hardware looked like.
-        ldx     #$02
+        ;
+        ; ult_ptr (not X) walks dir_buffer here, same page-crossing fix
+        ; as ult_read_data's own (ultimate_sdk.asm) - "X,dir_buffer"
+        ; absolute+X addressing can only ever reach 256 bytes past
+        ; dir_buffer no matter how the loop branches (a 6502 addressing-
+        ; mode limit, not fixable by changing the branch), which capped
+        ; every response's visible output at 256 bytes even after
+        ; ult_read_data itself got fixed to correctly capture the full
+        ; up-to-512-byte SOCK_READ this file's own request just above
+        ; asks for - fixing one without the other would have left this
+        ; command's real-hardware test looking just as broken as before.
+        ; ult_ptr is free to reuse here: its only earlier use in this
+        ; command (hg_append's source pointer, above) is long done by
+        ; this point.
+        lda     #<(dir_buffer+2)
+        sta     ult_ptr
+        lda     #>(dir_buffer+2)
+        sta     ult_ptr+1
+        ldy     #$00
 hg_print_loop
-        lda     dir_buffer,x
+        lda     (ult_ptr),y
         beq     hg_print_done
         jsr     $ffd2
-        inx
+        iny
         bne     hg_print_loop
+        inc     ult_ptr+1
+        jmp     hg_print_loop
 hg_print_done
         jmp     bank_return_basic
 

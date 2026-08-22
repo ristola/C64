@@ -37,11 +37,11 @@ lab_cursor  = $0a    ; CARTRIDGE LAB submenu's own cursor, 1-6 - same
                       ; visit (zp_save/zp_restore only brackets the
                       ; whole visit, not each submenu trip), so it needs
                       ; its own explicit "defaults to item 1" reset.
-diag_cursor = $0b    ; HARDWARE DIAGNOSTICS submenu's cursor, 1-2 - same
+diag_cursor = $0b    ; DIAGNOSTICS submenu's cursor, 1-6 - same
                       ; as lab_cursor, reset in menu_diag_open.
 cur_menu    = $0c    ; which of the three cursors above is "live" right
                       ; now: 0=top-level (menu_cursor), 1=CARTRIDGE LAB
-                      ; (lab_cursor), 2=HARDWARE DIAGNOSTICS (diag_
+                      ; (lab_cursor), 2=DIAGNOSTICS (diag_
                       ; cursor). menu_cursor_move/menu_highlight_update
                       ; (below) both index menu_cursor,cur_menu (i.e.
                       ; the literal $09,X - same oversized-addressing
@@ -63,8 +63,8 @@ mhu_item_count_p1  = $0e  ; ditto, latched item-count-plus-1 (the loop
 ; Per-menu tables, indexed by cur_menu (0=top,1=lab,2=diag) - menu_
 ; cursor_move/menu_highlight_update both read these instead of having
 ; the item count/starting row hardcoded per menu.
-menu_item_counts    !byte 12, 6, 2   ; for wraparound (menu_cursor_move)
-menu_item_counts_p1 !byte 13, 7, 3   ; for the row loop bound
+menu_item_counts    !byte 8, 8, 6    ; for wraparound (menu_cursor_move)
+menu_item_counts_p1 !byte 9, 9, 7    ; for the row loop bound
                                        ; (menu_highlight_update) - +1
                                        ; because that loop's X starts at
                                        ; 1 and stops the iteration AFTER
@@ -142,8 +142,10 @@ menu_open
         sta     num_val
 menu_wait
         jsr     $ffe4
-        beq     menu_wait
-
+        bne     +
+        jsr     menu_sparkle_update  ; idle - twinkle the title, then
+        jmp     menu_wait              ; keep polling
++
         cmp     #$03         ; RUN/STOP - back out of the menu entirely
         beq     menu_exit
         cmp     #$0d         ; RETURN - dispatch the typed number (or,
@@ -200,7 +202,7 @@ menu_wait
         sta     num_val
         jmp     menu_wait
 
-; Shared by RUN/STOP (menu_wait above) and item 12, EXIT (menu_
+; Shared by RUN/STOP (menu_wait above) and item 8, EXIT (menu_
 ; dispatch_num below) - same "leave the menu" action either way.
 menu_exit
         jsr     menu_charset_off  ; back to the stock character ROM
@@ -232,12 +234,9 @@ menu_dispatch_num
                                ; effective selection too, same as if it
                                ; had been typed
 +
-        cmp     #13
-        bcc     +            ; < 13 - valid, continue below
-        jmp     menu_open    ; >12 - invalid, redraw - JMP, not BCS:
-                               ; menu_open is now too far away for a
-                               ; branch to reach directly (this dispatch
-                               ; chain grew since BCS was first written)
+        cmp     #9
+        bcc     +            ; < 9 - valid, continue below
+        jmp     menu_open    ; >8 - invalid, redraw
 +
         cmp     #1
         bne     nd1
@@ -255,35 +254,17 @@ nd2     cmp     #3
         sta     num_val
         jsr     feat_call
         jmp     menu_open
-nd3     cmp     #4
-        bne     nd4
-        lda     #FEAT_CIA
-        sta     num_val
-        jsr     feat_call
-        jmp     menu_open
-nd4     cmp     #5
-        bne     nd5
-        lda     #FEAT_VIC
-        sta     num_val
-        jsr     feat_call
-        jmp     menu_open
-nd5     cmp     #6
+nd3     cmp     #6
         bne     nd6
-        lda     #FEAT_MEMORY
-        sta     num_val
-        jsr     feat_call
-        jmp     menu_open
-nd6     cmp     #10
-        bne     nd10
         jsr     menu_diag_open
         jmp     menu_open
-nd10    cmp     #11
-        bne     nd11
+nd6     cmp     #7
+        bne     nd7
         jsr     menu_fastload_open
         jmp     menu_open
-nd11    cmp     #12
+nd7     cmp     #8
         beq     menu_exit
-        jsr     show_stub    ; A = 7-9 in practice (1-6/10-12 all have
+        jsr     show_stub    ; A = 4-5 in practice (1-3/6-8 all have
                                ; real dispatch above), looks up the name
                                ; itself
         jmp     menu_open
@@ -319,15 +300,19 @@ feat_call
 ; open above) and RUN/STOP (menu_wait above), not this one.
 menu_lab_open
         lda     #1
+        sta     $0a          ; lab_cursor - defaults to item 1, but only
+                               ; on a FRESH entry from the top-level menu;
+                               ; menu_lab_dispatch_num's own return path
+                               ; jumps to menu_lab_redraw below instead,
+                               ; which skips this so the pointer stays on
+                               ; whatever item was just launched rather
+                               ; than snapping back to item 1 every time
+menu_lab_redraw
+        lda     #1
         sta     $0c          ; cur_menu (CARTRIDGE LAB=1) - literal, see
                                ; menu_cursor's own comment for why. Must
                                ; be set before menu_lab_draw, which
                                ; paints the highlight
-        sta     $0a          ; lab_cursor - defaults to item 1 every
-                               ; time this submenu opens - see its own
-                               ; comment (top of file) for why this
-                               ; needs an explicit reset, unlike the
-                               ; top-level menu_cursor
         jsr     menu_lab_draw
         lda     #$00
         sta     num_val
@@ -385,58 +370,74 @@ menu_lab_dispatch_num
         lda     $0a          ; lab_cursor - nothing typed, RETURN alone
         sta     num_val      ; activates whatever it's currently on
 +
-        cmp     #7
-        bcs     menu_lab_open  ; >6 - invalid, redraw
+        cmp     #9
+        bcs     menu_lab_redraw  ; >8 - invalid, redraw - leave the
+                                   ; pointer as-is, nothing was launched
+        sta     $0a          ; lab_cursor - track the item actually being
+                               ; launched (covers RETURN-with-typed-digit
+                               ; too, not just cursor-based selection), so
+                               ; returning here shows the same highlight
 
         cmp     #1
         bne     ld1
-        lda     #<lab_name01
-        sta     str_ptr
-        lda     #>lab_name01
-        sta     str_ptr+1
-        jsr     show_named_stub
-        jmp     menu_lab_open
+        lda     #FEAT_READ_CHIP
+        sta     num_val
+        jsr     feat_call
+        jmp     menu_lab_redraw
 ld1     cmp     #2
         bne     ld2
-        lda     #<lab_name02
-        sta     str_ptr
-        lda     #>lab_name02
-        sta     str_ptr+1
-        jsr     show_named_stub
-        jmp     menu_lab_open
+        lda     #FEAT_VERIFY_EPROM
+        sta     num_val
+        jsr     feat_call
+        jmp     menu_lab_redraw
 ld2     cmp     #3
         bne     ld3
-        lda     #<lab_name03
+        lda     eprom_read_done
+        bne     ld2_dump
+        lda     #<lab_name03_nodata
         sta     str_ptr
-        lda     #>lab_name03
+        lda     #>lab_name03_nodata
         sta     str_ptr+1
         jsr     show_named_stub
-        jmp     menu_lab_open
+        jmp     menu_lab_redraw
+ld2_dump
+        lda     #FEAT_EPROM_DUMP
+        sta     num_val
+        jsr     feat_call
+        jmp     menu_lab_redraw
 ld3     cmp     #4
         bne     ld4
-        lda     #<lab_name04
-        sta     str_ptr
-        lda     #>lab_name04
-        sta     str_ptr+1
-        jsr     show_named_stub
-        jmp     menu_lab_open
+        lda     #FEAT_BACKUP_EPROM
+        sta     num_val
+        jsr     feat_call
+        jmp     menu_lab_redraw
 ld4     cmp     #5
         bne     ld5
-        lda     #<lab_name05
-        sta     str_ptr
-        lda     #>lab_name05
-        sta     str_ptr+1
-        jsr     show_named_stub
-        jmp     menu_lab_open
+        lda     #FEAT_LOAD_EPROM
+        sta     num_val
+        jsr     feat_call
+        jmp     menu_lab_redraw
 ld5     cmp     #6
+        bne     ld6
+        lda     #FEAT_BANK_SCANNER
+        sta     num_val
+        jsr     feat_call
+        jmp     menu_lab_redraw
+ld6     cmp     #7
+        bne     ld7
+        lda     #FEAT_EPROM_DUMP  ; HEX VIEWER is the same viewer DUMP
+        sta     num_val             ; EPROM uses, just reachable without
+        jsr     feat_call           ; needing READ CHIP run first (no
+        jmp     menu_lab_redraw     ; eprom_read_done gate)
+ld7     cmp     #8
         beq     +
-        jmp     menu_lab_open ; shouldn't happen - already range-checked
-+       lda     #<lab_name06
-        sta     str_ptr
-        lda     #>lab_name06
-        sta     str_ptr+1
-        jsr     show_named_stub
-        jmp     menu_lab_open
+        jmp     menu_lab_redraw ; shouldn't happen - already range-checked
++       lda     #FEAT_SEARCH_ROM
+        sta     num_val
+        jsr     feat_call
+        jmp     menu_lab_redraw
+
+lab_name03_nodata !text "NO EPROM DATA - RUN READ EPROM FIRST" : !byte 0
 
 menu_lab_draw
         lda     #$93         ; clear screen
@@ -459,15 +460,8 @@ menu_lab_draw_done
         cli
         jsr     menu_highlight_update  ; paint the pointer - cur_menu
                                           ; was already set to 1 by
-                                          ; menu_lab_open before this ran
+                                          ; menu_lab_redraw before this ran
         rts
-
-lab_name01 !text "READ CHIP" : !byte 0
-lab_name02 !text "PROGRAM CARTRIDGE" : !byte 0
-lab_name03 !text "CLONE CARTRIDGE" : !byte 0
-lab_name04 !text "VERIFY" : !byte 0
-lab_name05 !text "BACKUP CARTRIDGE" : !byte 0
-lab_name06 !text "RESTORE CARTRIDGE" : !byte 0
 
 menu_lab_data
         !byte   $9f                                        ; cyan
@@ -477,18 +471,22 @@ menu_lab_data
         !byte   $0d
         !text   "=============================="
         !byte   $0d,$0d
-        !byte   $9e                                        ; yellow
-        !text   "1. READ CHIP"
+        !byte   $1f                                        ; blue
+        !text   "1. READ EPROM"
         !byte   $0d
-        !text   "2. PROGRAM CARTRIDGE"
+        !text   "2. VERIFY EPROM"
         !byte   $0d
-        !text   "3. CLONE CARTRIDGE"
+        !text   "3. DUMP EPROM"
         !byte   $0d
-        !text   "4. VERIFY"
+        !text   "4. BACKUP EPROM"
         !byte   $0d
-        !text   "5. BACKUP CARTRIDGE"
+        !text   "5. LOAD EPROM TO RAM"
         !byte   $0d
-        !text   "6. RESTORE CARTRIDGE"
+        !text   "6. BANK SCANNER"
+        !byte   $0d
+        !text   "7. HEX VIEWER"
+        !byte   $0d
+        !text   "8. SEARCH ROM"
         !byte   $0d,$0d
         !byte   $9f                                        ; cyan
         !text   "<- = BACK"
@@ -497,22 +495,32 @@ menu_lab_data
         !text   "SELECT: "
         !byte   $00
 
-; --- HARDWARE DIAGNOSTICS submenu (item 10) - JOYSTICK TESTER (real,
-; feat_joystick_tester) and KEYBOARD MATRIX VIEWER (stub) used to be
-; their own top-level items 4 and 5; moved here instead so the top-
-; level list groups them under one diagnostics entry as the menu keeps
-; growing. Same submenu shape as CARTRIDGE LAB (menu_lab_open) above,
-; just two entries - see that routine's own comments for the back-
+; --- DIAGNOSTICS submenu (item 6) - JOYSTICK TESTER and KEYBOARD
+; MATRIX VIEWER used to be their own top-level items 4 and 5; CIA TIMER
+; MONITOR/VIC-II REGISTER VIEWER/MEMORY VIEWER/ASSEMBLY MONITOR used to
+; be top-level items 4-7. All six now live here instead, so the top-
+; level list groups every hardware-inspection tool under one entry as
+; the menu keeps growing. Same submenu shape as CARTRIDGE LAB (menu_
+; lab_open) above - see that routine's own comments for the back-
 ; arrow/dispatch details, unchanged here.
 menu_diag_open
+        lda     #1
+        sta     $0b          ; diag_cursor - defaults to item 1, but only
+                               ; on a FRESH entry from the top-level menu;
+                               ; menu_diag_dispatch_num's own return path
+                               ; jumps to menu_diag_redraw below instead,
+                               ; which skips this so the pointer stays on
+                               ; whatever item was just launched rather
+                               ; than snapping back to a fixed position
+                               ; every time (previously this even reused
+                               ; the #2 already in A from cur_menu below,
+                               ; so it landed on item 2, not 1)
+menu_diag_redraw
         lda     #2
-        sta     $0c          ; cur_menu (HARDWARE DIAGNOSTICS=2) -
+        sta     $0c          ; cur_menu (DIAGNOSTICS=2) -
                                ; literal, see menu_cursor's own comment
                                ; for why. Must be set before menu_diag_
                                ; draw, which paints the highlight
-        sta     $0b          ; diag_cursor - defaults to item 1 every
-                               ; time this submenu opens, same as
-                               ; lab_cursor's own reset (menu_lab_open)
         jsr     menu_diag_draw
         lda     #$00
         sta     num_val
@@ -560,7 +568,7 @@ menu_diag_wait
         sta     num_val
         jmp     menu_diag_wait
 menu_diag_back
-        rts                  ; menu_dispatch_num's item-10 case does
+        rts                  ; menu_dispatch_num's item-6 case does
                               ; "jmp menu_open" right after this jsr
                               ; returns, redrawing the main menu
 
@@ -570,26 +578,58 @@ menu_diag_dispatch_num
         lda     $0b          ; diag_cursor - nothing typed, RETURN alone
         sta     num_val      ; activates whatever it's currently on
 +
-        cmp     #3
-        bcs     menu_diag_open  ; >2 - invalid, redraw
+        cmp     #7
+        bcs     menu_diag_redraw  ; >6 - invalid, redraw - leave the
+                                    ; pointer as-is, nothing was launched
+        sta     $0b          ; diag_cursor - track the item actually being
+                               ; launched (covers RETURN-with-typed-digit
+                               ; too, not just cursor-based selection), so
+                               ; returning here shows the same highlight
 
         cmp     #1
         bne     dd1
         lda     #FEAT_JOYSTICK
         sta     num_val
         jsr     feat_call
-        jmp     menu_diag_open
+        jmp     menu_diag_redraw
 dd1     cmp     #2
-        beq     +
-        jmp     menu_diag_open ; shouldn't happen - already range-checked
-+       lda     #<diag_name02
+        bne     dd2
+        lda     #<diag_name02
         sta     str_ptr
         lda     #>diag_name02
         sta     str_ptr+1
         jsr     show_named_stub
-        jmp     menu_diag_open
+        jmp     menu_diag_redraw
+dd2     cmp     #3
+        bne     dd3
+        lda     #FEAT_CIA
+        sta     num_val
+        jsr     feat_call
+        jmp     menu_diag_redraw
+dd3     cmp     #4
+        bne     dd4
+        lda     #FEAT_VIC
+        sta     num_val
+        jsr     feat_call
+        jmp     menu_diag_redraw
+dd4     cmp     #5
+        bne     dd5
+        lda     #FEAT_MEMORY
+        sta     num_val
+        jsr     feat_call
+        jmp     menu_diag_redraw
+dd5     cmp     #6
+        beq     +
+        jmp     menu_diag_redraw ; shouldn't happen - already range-checked
++       lda     #<diag_name06
+        sta     str_ptr
+        lda     #>diag_name06
+        sta     str_ptr+1
+        jsr     show_named_stub
+        jmp     menu_diag_redraw
 
 diag_name02 !text "KEYBOARD MATRIX VIEWER" : !byte 0
+diag_name06 !text "ASSEMBLY MONITOR" : !byte 0
 
 menu_diag_draw
         lda     #$93         ; clear screen
@@ -612,21 +652,29 @@ menu_diag_draw_done
         cli
         jsr     menu_highlight_update  ; paint the pointer - cur_menu
                                           ; was already set to 2 by
-                                          ; menu_diag_open before this ran
+                                          ; menu_diag_redraw before this ran
         rts
 
 menu_diag_data
         !byte   $9f                                        ; cyan
         !text   "=============================="
         !byte   $0d
-        !text   "       HARDWARE DIAGNOSTICS"
+        !text   "          DIAGNOSTICS"
         !byte   $0d
         !text   "=============================="
         !byte   $0d,$0d
-        !byte   $9e                                        ; yellow
+        !byte   $1f                                        ; blue
         !text   "1. JOYSTICK TESTER"
         !byte   $0d
         !text   "2. KEYBOARD MATRIX VIEWER"
+        !byte   $0d
+        !text   "3. CIA TIMER MONITOR"
+        !byte   $0d
+        !text   "4. VIC-II REGISTER VIEWER"
+        !byte   $0d
+        !text   "5. MEMORY VIEWER"
+        !byte   $0d
+        !text   "6. ASSEMBLY MONITOR"
         !byte   $0d,$0d
         !byte   $9f                                        ; cyan
         !text   "<- = BACK"
@@ -635,7 +683,7 @@ menu_diag_data
         !text   "SELECT: "
         !byte   $00
 
-; --- FASTLOAD SETTINGS (item 11) - shows/toggles fastload_enabled
+; --- FASTLOAD SETTINGS (item 7) - shows/toggles fastload_enabled
 ; (slots.asm), which DloadCmd (bank10_content.asm) checks before
 ; deciding whether to bank_call into FastDload (bank 13, real, working)
 ; or fall back to plain KERNAL_LOAD. No BASIC command for this
@@ -780,6 +828,132 @@ menu_draw_done
                                           ; menu_cursor's own comment)
         rts
 
+; --- Title sparkle: up to SPARKLE_SLOTS stars flash briefly at random
+; positions (from the sparkle_offsets candidates, in the blank rows
+; above/below the title) and random times while menu_wait is idle.
+; Top-level menu only: menu_lab_wait/menu_diag_wait don't call this -
+; their own screens use rows 0/3 for real content (their own divider/
+; heading), not blank padding, so poking sparkles there would corrupt
+; them.
+;
+; Two earlier versions of this were both stateless formulas (a fixed
+; position always flashing on a fixed schedule, then a slower fixed
+; schedule) - confirmed live as first "very rapid", then still "pretty
+; frequent" and always the same repeating pattern. This version keeps
+; real state per slot (a countdown and which candidate it's using) so
+; positions and timing genuinely vary run to run, and rate-limits
+; itself to real jiffy ticks (below) rather than however fast menu_
+; wait's GETIN loop happens to spin, so the pace doesn't depend on
+; that loop's own speed.
+;
+; $10 latches the last $A2 (TIME, jiffy clock low byte) this was called
+; with; work only happens once that's changed (i.e., at most once per
+; 1/60 sec, however many times this actually gets called in between).
+; $11-$13 are each slot's countdown (0 = inactive/available, otherwise
+; ticks left until it goes fully dark); $14-$16 are each slot's
+; candidate index into sparkle_offsets while active. $D012 (current
+; raster line) free-runs far faster than menu_wait's own loop and isn't
+; synced to it, so it's a convenient, already-ticking entropy source -
+; same idea jet_reveal_letter (resident.asm) already uses for the boot
+; flyby's own letter-color choice.
+;
+; While a slot's countdown is running, it flickers (mostly dark, lit on
+; roughly 1 tick in 4 - a real flash, not a steady dot the whole time)
+; rather than staying solidly on until it expires - user feedback was
+; "make the sparkle flash more than it stays on". Yellow ($07), not
+; white - also requested. Each activation also rolls its own random
+; duration (SPARKLE_TICKS_MIN..MAX) instead of a fixed one, on top of
+; the random position and random wait-until-next-one this already had,
+; so nothing about a given sparkle repeats the same way twice.
+SPARKLE_SLOTS      = 3
+SPARKLE_COUNT      = 9      ; candidates in sparkle_offsets below
+SPARKLE_CHANCE     = $7f    ; ~1-in-128 per tick that a free slot
+                               ; lights (~2.1 sec average gap - was
+                               ; $1f/~1-in-32/~0.5 sec, user feedback
+                               ; wanted more delay between sparkles)
+SPARKLE_TICKS_MIN  = 20     ; on-time once lit: MIN + (0..range), so
+SPARKLE_TICKS_RANGE = $1f   ;  ~0.33-0.85 sec at 60Hz
+sparkle_offsets !byte 4, 11, 20, 29, 36, 126, 135, 144, 153
+menu_sparkle_update
+        lda     $a2
+        cmp     $10
+        beq     msu_rts      ; same tick as last call - nothing to do
+        sta     $10
+
+        ldx     #0           ; age down/expire any active slots first
+msu_age_loop
+        lda     $11,x
+        beq     msu_age_next   ; already inactive
+        sec
+        sbc     #1
+        sta     $11,x
+        beq     msu_expire      ; just hit 0 - erase and free the slot
+        ldy     $14,x           ; still counting down - flicker: lit on
+        lda     sparkle_offsets,y  ; roughly 1 tick in 4 (raster's low
+        tay                        ; 2 bits, resampled every tick),
+        lda     $d012              ; dark the rest - a flash, not a
+        and     #$03               ; steady glow
+        bne     msu_flicker_dark
+        lda     #42          ; '*' - same value as screen code and
+        sta     $0400,y      ; PETSCII for punctuation in this range
+        lda     #$07         ; yellow
+        sta     $d800,y
+        jmp     msu_age_next
+msu_flicker_dark
+        lda     #$20         ; space
+        sta     $0400,y
+        jmp     msu_age_next
+msu_expire
+        ldy     $14,x
+        lda     sparkle_offsets,y
+        tay
+        lda     #$20         ; space
+        sta     $0400,y
+msu_age_next
+        inx
+        cpx     #SPARKLE_SLOTS
+        bne     msu_age_loop
+
+        lda     $d012        ; roll for a new one - low odds, checked
+        and     #SPARKLE_CHANCE  ; once per real tick (see above), so
+        bne     msu_rts          ; this is a per-second-ish rate, not
+                                   ; per-loop-iteration
+        ldx     #0           ; find a free (inactive) slot, if any
+msu_find_free
+        lda     $11,x
+        beq     msu_activate
+        inx
+        cpx     #SPARKLE_SLOTS
+        bne     msu_find_free
+        rts                  ; all slots busy - try again next tick
+
+msu_activate
+        lda     $d012        ; pick a pseudo-random candidate 0-8:
+        eor     $a2          ; mix raster+jiffy, then reduce mod 9 by
+msu_reduce                     ; repeated subtraction (no divide on
+        cmp     #SPARKLE_COUNT  ; 6502) - cheap since it only runs on
+        bcc     msu_reduced      ; the rare tick a slot actually lights
+        sbc     #SPARKLE_COUNT   ; (carry's already right for this from
+        jmp     msu_reduce       ; the cmp just above, no extra sec)
+msu_reduced
+        cmp     $14,x        ; same candidate this slot used last time?
+        bne     msu_pos_ok   ; (still holds it even while inactive -
+        clc                   ; nothing clears $14-$16 on expiry, only
+        adc     #1            ; the timer) - bump to the next candidate
+        cmp     #SPARKLE_COUNT  ; instead (wrapping past the last one
+        bcc     msu_pos_ok      ; back to 0), guaranteeing back-to-back
+        lda     #0              ; sparkles in the same slot never repeat
+msu_pos_ok                       ; the same position
+        sta     $14,x
+        lda     $d012        ; random duration this time: a different
+        eor     $a2          ; raster+jiffy mix (this one hasn't been
+        and     #SPARKLE_TICKS_RANGE  ; reduced mod 9, just masked, so
+        clc                            ; it's independent-ish of the
+        adc     #SPARKLE_TICKS_MIN     ; position roll just above)
+        sta     $11,x
+msu_rts
+        rts
+
 ; --- Selection pointer: CRSR UP/DOWN (menu_wait/menu_lab_wait/menu_
 ; diag_wait) move the CURRENT menu's own cursor (menu_cursor/lab_
 ; cursor/diag_cursor, selected via cur_menu - see its own comment
@@ -822,8 +996,8 @@ mcm_done
         jmp     menu_highlight_update
 
 ; Recolors the current menu's item rows' color RAM directly (not a
-; redraw - the text itself never changes) - yellow ($9e's raw color
-; value, 7) normally, white (1) for whichever row its own cursor points
+; redraw - the text itself never changes) - blue ($1f's raw color
+; value, 6) normally, white (1) for whichever row its own cursor points
 ; at. Whole-row width (40 columns) regardless of each item's actual
 ; text length, same as a normal menu selection bar - simpler than
 ; tracking each line's exact length, and the blank space past shorter
@@ -846,7 +1020,7 @@ menu_highlight_update
         ldx     #1              ; item number - X is free to become
                                    ; this now that cur_menu's been read
 mhu_row_loop
-        lda     #$07            ; yellow (unselected)
+        lda     #$06            ; blue (unselected)
         cpx     $0d             ; mhu_cursor_val
         bne     mhu_have_color
         lda     #$01            ; white (selected)
@@ -1013,31 +1187,30 @@ name_help   !text "HELP" : !byte 0
 name_rommon !text "ROM MONITOR" : !byte 0
 name_disasm !text "DISASSEMBLER" : !byte 0
 
-; Only ASSEMBLY MONITOR/MACHINE LANGUAGE TUTORIAL/BASIC WORKSPACE (7-9)
-; still fall through to the generic show_stub lookup below - CARTRIDGE
-; LAB (1), SID MUSIC DEMO (2), SPRITE EDITOR (3), CIA TIMER MONITOR
-; (4), VIC-II REGISTER VIEWER (5), MEMORY VIEWER (6), HARDWARE
-; DIAGNOSTICS (10, its own submenu now - see menu_diag_open below) and
-; FASTLOAD SETTINGS (11) all have real explicit dispatch in
-; menu_dispatch_num, same as before - this table is kept complete for
-; all 11 anyway (not just 7-9) purely for consistency with that
-; existing pattern; the rest are simply never reached through it.
+; Only MACHINE LANGUAGE TUTORIAL/BASIC WORKSPACE (4-5) still fall
+; through to the generic show_stub lookup below - CARTRIDGE LAB (1),
+; SID MUSIC DEMO (2), SPRITE EDITOR (3), DIAGNOSTICS (6, its own
+; submenu now - see menu_diag_open below), FASTLOAD SETTINGS (7) and
+; EXIT (8) all have real explicit dispatch in menu_dispatch_num, same
+; as before - this table is kept complete for all 8 anyway (not just
+; 4-5) purely for consistency with that existing pattern; the rest are
+; simply never reached through it. CIA TIMER MONITOR/VIC-II REGISTER
+; VIEWER/MEMORY VIEWER/ASSEMBLY MONITOR moved into the DIAGNOSTICS
+; submenu (diag_name02/diag_name06 and FEAT_CIA/FEAT_VIC/FEAT_MEMORY
+; above) and no longer have top-level entries at all.
 name01 !text "CARTRIDGE LAB" : !byte 0
 name02 !text "SID MUSIC DEMO" : !byte 0
 name03 !text "SPRITE EDITOR" : !byte 0
-name04 !text "CIA TIMER MONITOR" : !byte 0
-name05 !text "VIC-II REGISTER VIEWER" : !byte 0
-name06 !text "MEMORY VIEWER" : !byte 0
-name07 !text "ASSEMBLY MONITOR" : !byte 0
-name08 !text "MACHINE LANGUAGE TUTORIAL" : !byte 0
-name09 !text "BASIC WORKSPACE" : !byte 0
-name10 !text "HARDWARE DIAGNOSTICS" : !byte 0
-name11 !text "FASTLOAD SETTINGS" : !byte 0
+name04 !text "MACHINE LANGUAGE TUTORIAL" : !byte 0
+name05 !text "BASIC WORKSPACE" : !byte 0
+name06 !text "DIAGNOSTICS" : !byte 0
+name07 !text "FASTLOAD SETTINGS" : !byte 0
+name08 !text "EXIT" : !byte 0
 
 item_lo !byte <name01,<name02,<name03,<name04,<name05,<name06
-        !byte <name07,<name08,<name09,<name10,<name11
+        !byte <name07,<name08
 item_hi !byte >name01,>name02,>name03,>name04,>name05,>name06
-        !byte >name07,>name08,>name09,>name10,>name11
+        !byte >name07,>name08
 
 ; Rows 0-2 are left blank here on purpose - rows 1 and 2 get the bold
 ; 2x-size "SHACKMATE" title poked directly into screen/color RAM by
@@ -1060,30 +1233,22 @@ menu_data
         !byte   $9f                                        ; cyan
         !text   "           SUPER CARTRIDGE V1"
         !byte   $0d,$0d
-        !byte   $9e                                        ; yellow
+        !byte   $1f                                        ; blue
         !text   "1. CARTRIDGE LAB"
         !byte   $0d
         !text   "2. SID MUSIC DEMO"
         !byte   $0d
         !text   "3. SPRITE EDITOR"
         !byte   $0d
-        !text   "4. CIA TIMER MONITOR"
+        !text   "4. MACHINE LANGUAGE TUTORIAL"
         !byte   $0d
-        !text   "5. VIC-II REGISTER VIEWER"
+        !text   "5. BASIC WORKSPACE"
         !byte   $0d
-        !text   "6. MEMORY VIEWER"
+        !text   "6. DIAGNOSTICS"
         !byte   $0d
-        !text   "7. ASSEMBLY MONITOR"
+        !text   "7. FASTLOAD SETTINGS"
         !byte   $0d
-        !text   "8. MACHINE LANGUAGE TUTORIAL"
-        !byte   $0d
-        !text   "9. BASIC WORKSPACE"
-        !byte   $0d
-        !text   "10. HARDWARE DIAGNOSTICS"
-        !byte   $0d
-        !text   "11. FASTLOAD SETTINGS"
-        !byte   $0d
-        !text   "12. EXIT"
+        !text   "8. EXIT"
         !byte   $0d,$0d
         !byte   $9f                                        ; cyan
         !text   "F1 = HELP"

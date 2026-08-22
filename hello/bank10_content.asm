@@ -74,7 +74,13 @@ KERNAL_SAVE   = $ffd8
 BAS_LINKPRG = $a533
 BAS_DATAPTR_RESET = $a81d
 
-; --- Fixed-slot jump table entries for this bank (slots.asm) ---
+; --- Fixed-slot jump table entries for this bank (slots.asm). SLOT_
+; MLOAD (4) comes first - it reuses an unlabeled gap slot lower than
+; every other slot this bank fills (45-51), and !fill can't run
+; backward, so ascending slot-number order across this whole table
+; matters, not just grouping by command. ---
+!fill SLOT_MLOAD-*, $ff
+        jmp     MloadCmd
 !fill SLOT_DIR-*, $ff
         jmp     DirCmd
 !fill SLOT_DEVICE-*, $ff
@@ -90,8 +96,8 @@ BAS_DATAPTR_RESET = $a81d
 !fill SLOT_DSAVE-*, $ff
         jmp     DsaveCmd
 
-; Reserved slot-table range continues to $80FF regardless of how many
-; slots this bank actually fills in.
+; Reserved slot-table range continues to BANK_CONTENT_START regardless
+; of how many slots this bank actually fills in.
 !fill BANK_CONTENT_START-*, $ff
 
 *=BANK_CONTENT_START
@@ -1067,6 +1073,43 @@ dsave_err_msg_done
 dsave_err_msg
         !text   "?SAVE ERROR "
         !byte   0
+
+; --- %FILENAME (ML load shortcut, ExtTab/resident.asm): loads a raw
+; machine-language file to its own embedded address - SA=1, unlike
+; DLOAD's forced-address SA=0 above, so X/Y passed to KERNAL_LOAD are
+; ignored (the file's own 2-byte header supplies the real destination,
+; same as typing "FILENAME",8,1 at a bare LOAD statement) - matching
+; convention verified live for DLOAD's own SA=0 path, same $FFD5 entry
+; point either way. No BASIC-program pointer fixup afterward (BAS_
+; LINKPRG/VARTAB/ARYTAB/STREND/FRETOP) - those exist to fix up BASIC's
+; own program-space bookkeeping after DLOAD replaces the program text;
+; a machine-language load has nothing to do with BASIC's program space
+; at all, whatever it just loaded is used the way loaded code always
+; is (a separate SYS call). Not routed through FastDload (bank 13) even
+; when fastload_enabled - that routine's own SETLFS call is hardcoded
+; to SA=0 (see its own header comment), so it can't honor an embedded
+; address; always the plain KERNAL_LOAD path here. Reuses DLOAD's own
+; dload_error (bank10) for the error message rather than duplicating
+; it - same calling convention (carry set, A = KERNAL's error code). ---
+MloadCmd
+        jsr     parse_filename_opt
+        sty     disk_namelen
+        lda     disk_namelen
+        ldx     #<filename_buf
+        ldy     #>filename_buf
+        jsr     KERNAL_SETNAM
+        lda     #1              ; logical file number
+        ldx     disk_device
+        ldy     #1              ; SA=1: use the file's own embedded
+        jsr     KERNAL_SETLFS    ; load address
+        lda     #0              ; 0 = load (not verify)
+        ldx     #0              ; ignored by KERNAL_LOAD when SA=1, but
+        ldy     #0                ; it still reads X/Y - harmless dummy
+        jsr     KERNAL_LOAD
+        bcc     mload_ok
+        jmp     dload_error     ; A still holds the KERNAL error code
+mload_ok
+        jmp     bank_return_basic
 
 ; --- CD "name": partition/subdirectory change, CMD-drive convention
 ; ("CD:name"). Untested against real hardware (no CMD-style drive

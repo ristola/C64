@@ -1,12 +1,19 @@
 ; Bank 15 content: Menu Features. features.asm (SID demo, joystick
-; tester, CIA/VIC-II/memory viewers - plus bitmap.asm, which features.
-; asm's own graphics demo calls into directly) and spriteeditor.asm -
-; split off from Bank 14 (the F1 Cart Menu) the moment it turned out
-; common.asm plus all three of these files together still didn't fit in
-; one 8K bank, even after moving jet_charset_setup in from Bank 0 too -
-; see bank14_content.asm's own header for that story. This bank is part
-; of the protected "system" range - see slots.asm's FIRST_USER_BANK
-; comment for the wider policy.
+; tester, CIA/VIC-II/memory viewers, plus the CARTRIDGE LAB port: BANK
+; SCANNER/HEX VIEWER/VERIFY EPROM/LOAD EPROM TO RAM) - split off from
+; Bank 14 (the F1 Cart Menu) the moment it turned out common.asm plus
+; all the feature files together still didn't fit in one 8K bank, even
+; after moving jet_charset_setup in from Bank 0 too - see bank14_
+; content.asm's own header for that story. spriteeditor.asm moved on to
+; its own bank (16) later, once the CARTRIDGE LAB port needed the room
+; back - see slots.asm's SLOT_SPRITE_EDITOR_DISPATCH comment. bitmap.
+; asm (and the dead feat_graphics_demo/fgd_compass code that was its
+; only caller) was removed outright rather than relocated - it was
+; unreachable from any menu, confirmed by grepping the whole project
+; for callers before deleting it - freeing that room is what let VERIFY/
+; LOAD EPROM TO RAM's picker keep DEL support and made room for SEARCH
+; ROM. This bank is part of the protected "system" range - see slots.
+; asm's FIRST_USER_BANK comment for the wider policy.
 ;
 ; feat_dispatch below is the one cross-bank entry point every routine
 ; here is reached through - see slots.asm's SLOT_FEAT_DISPATCH comment
@@ -47,7 +54,20 @@ feat_dispatch
         jmp     bank_return
 fd1     cmp     #FEAT_SPRITE_EDITOR
         bne     fd2
-        jsr     feat_sprite_editor
+        lda     #<SLOT_SPRITE_EDITOR_DISPATCH  ; SLOT_SPRITE_EDITOR_
+        sta     call_ptr                          ; DISPATCH is a fixed
+        lda     #>SLOT_SPRITE_EDITOR_DISPATCH     ; address (same slot-
+        sta     call_ptr+1                        ; table layout in
+        lda     #16                                ; every bank), so
+        jsr     bank_call                          ; this works exactly
+                                                       ; like the resident_
+                                                       ; copy_page nested
+                                                       ; bank_calls already
+                                                       ; elsewhere in this
+                                                       ; file - Bank 16
+                                                       ; now holds the
+                                                       ; Sprite Editor,
+                                                       ; see slots.asm
         jmp     bank_return
 fd2     cmp     #FEAT_CIA
         bne     fd3
@@ -62,10 +82,38 @@ fd4     cmp     #FEAT_MEMORY
         jsr     feat_memory_viewer
         jmp     bank_return
 fd5     cmp     #FEAT_JOYSTICK
+        bne     fd6
+        jsr     feat_joystick_tester
+        jmp     bank_return
+fd6     cmp     #FEAT_EPROM_DUMP
+        bne     fd7
+        jsr     feat_eprom_dump
+        jmp     bank_return
+fd7     cmp     #FEAT_READ_CHIP
+        bne     fd8
+        jsr     feat_read_chip
+        jmp     bank_return
+fd8     cmp     #FEAT_BACKUP_EPROM
+        bne     fd9
+        jsr     feat_backup_eprom
+        jmp     bank_return
+fd9     cmp     #FEAT_BANK_SCANNER
+        bne     fd10
+        jsr     feat_bank_scanner
+        jmp     bank_return
+fd10    cmp     #FEAT_VERIFY_EPROM
+        bne     fd11
+        jsr     feat_verify_eprom
+        jmp     bank_return
+fd11    cmp     #FEAT_LOAD_EPROM
+        bne     fd12
+        jsr     feat_load_eprom
+        jmp     bank_return
+fd12    cmp     #FEAT_SEARCH_ROM
         beq     +
         jmp     bank_return ; shouldn't happen - callers only ever set
                               ; num_val to one of the FEAT_* constants
-+       jsr     feat_joystick_tester
++       jsr     feat_search_rom
         jmp     bank_return
 
 ; --- Cycle-counting busy-wait delay (~1/60 sec per unit) - identical
@@ -97,5 +145,3 @@ dly_inner
         rts
 
 !source "features.asm"
-!source "bitmap.asm"
-!source "spriteeditor.asm"

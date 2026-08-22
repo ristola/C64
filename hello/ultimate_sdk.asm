@@ -168,10 +168,34 @@ ucw_check
         rts
 
 ; Read all currently available response data into (ult_outptr).
-; Null-terminates the buffer and returns the byte count in Y (and
-; ult_tmp). Make sure the buffer has room — this doesn't bound the
-; length itself, the DATA_AV status flag does.
+; Null-terminates the buffer and returns the LAST PAGE's byte count in Y
+; (and ult_tmp) - not a full 16-bit total, since no current caller needs
+; one (every caller either reads a single fixed-size record right after
+; the call, before ult_outptr could matter again, or scans the buffer
+; for the null terminator instead of trusting a length). Make sure the
+; buffer has room - this doesn't bound the length itself, the DATA_AV
+; status flag does, and the docs describe transport chunks up to 512
+; bytes (see ULT_READ_FILE's own comment).
+;
+; Y is only 8 bits, so "iny / bne loop" alone silently wraps every 256
+; bytes - not a truncation, active corruption: once Y wraps to 0, the
+; loop would exit (bne fails) even with more DATAAV data still waiting,
+; and the null-terminator write right after would then land at offset 0,
+; overwriting the response's own first byte instead of its last one.
+; Found by reading, not live hardware (VICE can't reach this code at
+; all) - HTTPGET's own SOCK_READ already requests up to 512 bytes per
+; call, well past where this would have bitten. Fixed the standard 6502
+; way: advance ult_outptr's own high byte on each page crossing so
+; (ult_outptr),y keeps landing on fresh memory instead of wrapping back
+; over what's already been written. That mutates ult_outptr, which every
+; existing caller assumes survives a call unchanged (e.g. ULT_HTTP_GET
+; re-reads (ult_outptr),y right after its own first ult_read_data call) -
+; saved/restored via the stack rather than auditing every call site.
 ult_read_data
+        lda     ult_outptr
+        pha
+        lda     ult_outptr+1
+        pha
         ldy     #$00
 ult_read_data_loop
         lda     ULT_STATUS
@@ -181,15 +205,30 @@ ult_read_data_loop
         sta     (ult_outptr),y
         iny
         bne     ult_read_data_loop
+        inc     ult_outptr+1
+        jmp     ult_read_data_loop
 ult_read_data_done
         lda     #$00
         sta     (ult_outptr),y
         sty     ult_tmp
+        pla
+        sta     ult_outptr+1
+        pla
+        sta     ult_outptr
         rts
 
 ; Read the status string (e.g. "00,OK") into (ult_outptr).
-; Null-terminates it. Byte count in Y / ult_tmp.
+; Null-terminates it. Byte count (last page only) in Y / ult_tmp - same
+; page-crossing fix as ult_read_data above, for the same reason (status
+; strings are normally short, but nothing stops a future one from
+; growing past 256 bytes, and the corruption-on-wrap failure mode is bad
+; enough - real data loss, not just a truncated print - to guard against
+; unconditionally rather than only where it's known to bite today).
 ult_read_status
+        lda     ult_outptr
+        pha
+        lda     ult_outptr+1
+        pha
         ldy     #$00
 ult_read_status_loop
         lda     ULT_STATUS
@@ -199,10 +238,16 @@ ult_read_status_loop
         sta     (ult_outptr),y
         iny
         bne     ult_read_status_loop
+        inc     ult_outptr+1
+        jmp     ult_read_status_loop
 ult_read_status_done
         lda     #$00
         sta     (ult_outptr),y
         sty     ult_tmp
+        pla
+        sta     ult_outptr+1
+        pla
+        sta     ult_outptr
         rts
 
 ; Acknowledge a completed exchange (call after reading data/status).

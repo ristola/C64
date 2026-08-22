@@ -1,6 +1,13 @@
 ; Sprite Editor: single-color 24x21 hi-res sprite, edited as a text-mode
-; grid with a live hardware-sprite preview alongside it. Included from
-; common.asm.
+; grid with a live hardware-sprite preview alongside it. Its own bank
+; (16) - relocated out of Bank 15 (Menu Features) once the CARTRIDGE
+; LAB port needed the room; reached via a cross-bank bank_call from
+; Bank 15's own feat_dispatch (SLOT_SPRITE_EDITOR, slots.asm) rather
+; than a same-bank JSR, since it's a self-contained feature that never
+; needs a SECOND round-trip mid-operation (unlike bitmap.asm, which
+; stayed in Bank 15 because the graphics demo calls into it repeatedly
+; every frame - cross-bank overhead on every one of those would be a
+; real cost, not just a one-time entry/exit).
 ;
 ; Edits happen directly in the sprite data buffer at $2000 (block 128 =
 ; $2000/64) - the same scratch block feat_graphics_demo uses transiently
@@ -15,6 +22,14 @@
 ; RAM sidesteps both problems, since none of this needs indirect
 ; addressing - $2000,X / $2000,Y with an 8-bit offset reaches the whole
 ; 63-byte sprite.
+; Same 8-entry bit-mask table bitmap.asm declares (SET/CLEAR PIXEL's own
+; needs) - redeclared here rather than shared, now that this file moved
+; to its own bank (16): a separate ACME assembly pass never sees
+; bitmap.asm's copy, same "redeclare identically" convention this
+; project already uses for num_val/dly_cnt between common.asm and
+; features.asm.
+bitmask !byte $80,$40,$20,$10,$08,$04,$02,$01
+
 se_cur_x  = $ca00     ; cursor column, 0-23
 se_cur_y  = $ca01     ; cursor row, 0-20
 se_tmp    = $ca02     ; fse_calc_offset scratch
