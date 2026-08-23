@@ -21,3 +21,18 @@ hardware/supercart/*.ses
 
 # Build/test disk images - regenerable output, not source
 /disks/
+
+# Fabrication Toolkit KiCad plugin output (JLCPCB-format Gerbers/BOM/CPL
+# zips, panelizer state) - regenerable from supercart.kicad_pcb, and goes
+# stale as soon as the board changes without a re-run
+hardware/supercart/production/
+hardware/supercart/fabrication-toolkit-options.json
+hardware/supercart/gerbers/Archive.zip
+
+# KiCad GUI-generated backup snapshots and stray duplicate board/project
+# files from experimentation - not source, recreated by the GUI itself
+hardware/supercart/_restore_backup_*/
+hardware/supercart/supercart.kicad-hor_pcb.*
+hardware/supercart/supercart.kicad_Hor_pcb.*
+hardware/supercart/supercart.kicad_pcb-2.*
+hardware/supercart/supercart_routed*.kicad_p*

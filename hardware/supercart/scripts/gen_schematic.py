@@ -79,7 +79,17 @@ lib_syms = {s.entryName: s for s in lib.symbols}
 device_lib = SymbolLib().from_file("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols/Device.kicad_sym")
 lib_syms["C"] = [s for s in device_lib.symbols if s.entryName == "C"][0]
 lib_syms["R"] = [s for s in device_lib.symbols if s.entryName == "R"][0]
-NICKNAMES = {"C": "Device", "R": "Device"}  # everything else defaults to "supercart"
+lib_syms["LED"] = [s for s in device_lib.symbols if s.entryName == "LED"][0]
+# Q1/Q2 (2N7002) and R2 (RY/BY# pull-up) are the status-LED additions below.
+# 2N7002 itself is an `extends "Q_NMOS_GSD"` variant (footprint/value/datasheet
+# override only, no pins of its own) -- same reason C1/C2/R1 use the generic
+# "C"/"R" symbols rather than a specific manufacturer part: kiutils'
+# symbol_pins()/geometry() below can't resolve `extends` chains, so the base
+# symbol is placed directly and Value/Footprint are overridden to the real
+# part, same pattern as C1/C2/R1.
+fet_lib = SymbolLib().from_file("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols/Transistor_FET.kicad_sym")
+lib_syms["Q_NMOS_GSD"] = [s for s in fet_lib.symbols if s.entryName == "Q_NMOS_GSD"][0]
+NICKNAMES = {"C": "Device", "R": "Device", "LED": "Device", "Q_NMOS_GSD": "Transistor_FET"}  # else "supercart"
 
 
 def symbol_pins(entry_name):
@@ -183,6 +193,87 @@ r1 = place_symbol("R", "R1", X_R1, Y_R1)
 r1.properties[1].value = "10k"
 r1.properties[2].value = "Resistor_SMD:R_0805_2012Metric"
 
+# --- Status LEDs (PWR/WRITE/BUSY), added 2026-08-23 per user spec ---
+#
+# WRITE (red) taps FLASH_WE_N, BUSY (amber) taps U2 pin 28 (RY/BY#) -- both
+# real signals already in this design, both active-LOW. RY/BY# needed a new
+# pull-up (R2) to work at all: verified from the datasheet ("RY/BY# is a
+# dedicated, OPEN-DRAIN output pin") that it only pulls low, never drives
+# high, and this design had never used it before (was TBD_FLASH_RYBY_N,
+# nothing else on the net) -- without R2 its "ready" state would be a
+# floating gate on Q2, not a clean high.
+#
+# Topology per LED (user asked for 2N7002-class MOSFETs "to prevent loading
+# the signals" -- a MOSFET gate draws ~0 DC current, unlike a BJT base):
+# a naive series low-side switch (gate=signal, source=GND, drain->LED->VCC)
+# actually lights the LED when the signal is HIGH, i.e. IDLE, since these
+# signals are active-low -- backwards. Fixed by wiring the MOSFET as a
+# SHUNT directly across the LED instead (drain=LED anode side, source=LED
+# cathode side): MOSFET ON (signal idle-high) shorts the LED dark; MOSFET
+# OFF (signal active-low) lets the fixed VCC->R->LED->GND path light it.
+# Verified against the truth table both ways before wiring, not assumed.
+# Small series gate resistors (R3/R4, 100R) are just ringing/ESD damping --
+# negligible effect on FLASH_WE_N's real timing (RC with the 2N7002's own
+# ~60pF Ciss is nanoseconds, versus the microsecond-scale signal itself).
+#
+# PWR (green) is a plain always-on indicator, no transistor needed.
+#
+# All three current-limit resistors (R5/R6/R7) are 2.2k per user spec.
+# Five distinct columns (25.4mm/10x grid apart -- generous, no risk of two
+# different components' pin-stub endpoints landing on the same coordinate
+# and silently merging nets, which happened during development here: R2
+# and R3 shared an X offset and, ~12.7mm apart in Y, their stubs coincided
+# exactly, merging VCC and Q1_GATE into one net until caught by a real ERC
+# run (`multiple_net_names`) and a coordinate-collision check).
+X_PULLUP, X_GATE_R, X_LED_R, X_FET, X_LED = (
+    X_U2 + 40.64, X_U2 + 66.04, X_U2 + 91.44, X_U2 + 116.84, X_U2 + 142.24
+)
+Y_PWR, Y_WRITE, Y_BUSY = Y0 - 40.64, Y0 - 20.32, Y0
+
+r2 = place_symbol("R", "R2", X_PULLUP, Y_BUSY)                  # RY/BY# pull-up
+r2.properties[1].value = "10k"
+r2.properties[2].value = "Resistor_SMD:R_0805_2012Metric"
+
+r3 = place_symbol("R", "R3", X_GATE_R, Y_WRITE)                 # Q1 gate resistor
+r3.properties[1].value = "100"
+r3.properties[2].value = "Resistor_SMD:R_0805_2012Metric"
+
+r4 = place_symbol("R", "R4", X_GATE_R, Y_BUSY)                  # Q2 gate resistor
+r4.properties[1].value = "100"
+r4.properties[2].value = "Resistor_SMD:R_0805_2012Metric"
+
+r5 = place_symbol("R", "R5", X_LED_R, Y_PWR)                    # PWR LED
+r5.properties[1].value = "2.2k"
+r5.properties[2].value = "Resistor_SMD:R_0805_2012Metric"
+
+r6 = place_symbol("R", "R6", X_LED_R, Y_WRITE)                  # WRITE LED
+r6.properties[1].value = "2.2k"
+r6.properties[2].value = "Resistor_SMD:R_0805_2012Metric"
+
+r7 = place_symbol("R", "R7", X_LED_R, Y_BUSY)                   # BUSY LED
+r7.properties[1].value = "2.2k"
+r7.properties[2].value = "Resistor_SMD:R_0805_2012Metric"
+
+q1 = place_symbol("Q_NMOS_GSD", "Q1", X_FET, Y_WRITE)           # WRITE shunt
+q1.properties[1].value = "2N7002"
+q1.properties[2].value = "Package_TO_SOT_SMD:SOT-23"
+
+q2 = place_symbol("Q_NMOS_GSD", "Q2", X_FET, Y_BUSY)            # BUSY shunt
+q2.properties[1].value = "2N7002"
+q2.properties[2].value = "Package_TO_SOT_SMD:SOT-23"
+
+led1 = place_symbol("LED", "LED1", X_LED, Y_PWR)                # PWR, green
+led1.properties[1].value = "LED_Green"
+led1.properties[2].value = "LED_SMD:LED_0805_2012Metric"
+
+led2 = place_symbol("LED", "LED2", X_LED, Y_WRITE)               # WRITE, red
+led2.properties[1].value = "LED_Red"
+led2.properties[2].value = "LED_SMD:LED_0805_2012Metric"
+
+led3 = place_symbol("LED", "LED3", X_LED, Y_BUSY)                # BUSY, amber
+led3.properties[1].value = "LED_Amber"
+led3.properties[2].value = "LED_SMD:LED_0805_2012Metric"
+
 geo = {
     "J1": (X_J1, Y0) + geometry("C64_EDGE_CONNECTOR_44"),
     "U1": (X_U1, Y0) + geometry("ATF22V10C_SUPERCART"),
@@ -192,6 +283,17 @@ geo = {
     "C1": (X_C1, Y_C1) + geometry("C"),
     "C2": (X_C2, Y_C2) + geometry("C"),
     "R1": (X_R1, Y_R1) + geometry("R"),
+    "R2": (X_PULLUP, Y_BUSY) + geometry("R"),
+    "R3": (X_GATE_R, Y_WRITE) + geometry("R"),
+    "R4": (X_GATE_R, Y_BUSY) + geometry("R"),
+    "R5": (X_LED_R, Y_PWR) + geometry("R"),
+    "R6": (X_LED_R, Y_WRITE) + geometry("R"),
+    "R7": (X_LED_R, Y_BUSY) + geometry("R"),
+    "Q1": (X_FET, Y_WRITE) + geometry("Q_NMOS_GSD"),
+    "Q2": (X_FET, Y_BUSY) + geometry("Q_NMOS_GSD"),
+    "LED1": (X_LED, Y_PWR) + geometry("LED"),
+    "LED2": (X_LED, Y_WRITE) + geometry("LED"),
+    "LED3": (X_LED, Y_BUSY) + geometry("LED"),
 }
 
 
@@ -238,8 +340,10 @@ nets = {
     # adopted here on that real precedent, per user choice 2026-08-21.
     # J1 GAME_N/EXROM_N also join these two nets (see below) -- static 8K
     # cartridge mode, decided 2026-08-21, no Ultimax/mode-switching bootloader.
-    "VCC": [("J1", "2"), ("J1", "3"), ("J1", "8"), ("U1", "24"), ("U2", "44"), ("U2", "23"), ("#FLG1", "1"), ("C1", "1"), ("C2", "1"), ("R1", "1")],
-    "GND": [("J1", "1"), ("J1", "22"), ("J1", "9"), ("J1", "A"), ("J1", "Z"), ("U1", "12"), ("U2", "21"), ("U2", "22"), ("#FLG2", "1"), ("C1", "2"), ("C2", "2")],
+    "VCC": [("J1", "2"), ("J1", "3"), ("J1", "8"), ("U1", "24"), ("U2", "44"), ("U2", "23"), ("#FLG1", "1"), ("C1", "1"), ("C2", "1"), ("R1", "1"),
+            ("R2", "1"), ("R5", "1"), ("R6", "1"), ("R7", "1")],
+    "GND": [("J1", "1"), ("J1", "22"), ("J1", "9"), ("J1", "A"), ("J1", "Z"), ("U1", "12"), ("U2", "21"), ("U2", "22"), ("#FLG2", "1"), ("C1", "2"), ("C2", "2"),
+            ("LED1", "1"), ("LED2", "1"), ("LED3", "1"), ("Q1", "2"), ("Q2", "2")],
     # C64 bus control -> GAL
     "PHI2": [("J1", "E"), ("U1", "1")],
     "IO1_N": [("J1", "7"), ("U1", "10")],
@@ -283,10 +387,17 @@ nets = {
     # GAL entirely -- no ROML pin exists on U1.
     "ROML_N": [("J1", "11"), ("U2", "43")],
     "FLASH_OE_N": [("U1", "21"), ("U2", "29")],
-    "FLASH_WE_N": [("U1", "22"), ("U2", "30"), ("R1", "2")],  # + 10k pull-up to VCC (R1)
-    # --- TBD: still undefined in SUPER_CART_R01.PLD rev 0.2 ---
-    "TBD_FLASH_RYBY_N": [("U2", "28")],
+    "FLASH_WE_N": [("U1", "22"), ("U2", "30"), ("R1", "2"), ("R3", "1")],  # + 10k pull-up to VCC (R1), + WRITE LED gate resistor (R3)
+    # RY/BY# (was TBD_FLASH_RYBY_N -- now real, 2026-08-23): open-drain per
+    # datasheet, R2 is its required pull-up (nothing pulled it up before).
+    "FLASH_RYBY_N": [("U2", "28"), ("R2", "2"), ("R4", "1")],
     "TBD_ROMH_N": [("J1", "B")],
+    # --- Status LED circuits (2026-08-23) ---
+    "Q1_GATE": [("R3", "2"), ("Q1", "1")],           # R3 -> Q1 gate
+    "WRITE_LED_A": [("R6", "2"), ("LED2", "2"), ("Q1", "3")],  # LED2 anode + Q1 drain (shunt node)
+    "Q2_GATE": [("R4", "2"), ("Q2", "1")],           # R4 -> Q2 gate
+    "BUSY_LED_A": [("R7", "2"), ("LED3", "2"), ("Q2", "3")],   # LED3 anode + Q2 drain (shunt node)
+    "PWR_LED_A": [("R5", "2"), ("LED1", "2")],       # LED1 anode, always-on (no transistor)
 }
 
 # Pins deliberately left unconnected (out of current design scope; not asked

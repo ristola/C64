@@ -30,10 +30,27 @@ OFFSETS = {
     "C1": (0, -2_000_000),
     "C2": (0, 2_500_000),
     "R1": (0, 2_500_000),
-    "J1": (0, -8_000_000),
 }
 
+# Status-LED circuit (2026-08-23): 9 small (0805/SOT-23) parts packed into
+# one 58x15mm strip -- individually repositioning each Reference field to
+# dodge its neighbors' silkscreen (like OFFSETS above does for the original
+# 4 parts) got fragile fast at this density. Hiding the Reference text
+# instead is simpler, reliable, and standard practice at this component
+# scale (0805/SOT-23 reference silkscreen is rarely legible on a real
+# fabbed board anyway). LOGO1 is hidden for a different reason entirely --
+# see gen_pcb.py's own comment: it needs a real, non-empty Reference for
+# ExportSpecctraDSN to work at all, but was never meant to be visible.
+HIDDEN_REFS = {"LOGO1", "LED1", "LED2", "LED3", "Q1", "Q2", "R2", "R3", "R4", "R5", "R6", "R7",
+               # J1 was in OFFSETS (dy=-8mm) until the status-LED row filled
+               # Y=36-47 (where that landed) and its own pads fill essentially
+               # all of Y=50.5-59.5 -- no offset in the remaining ~3.5mm gap
+               # cleared both. Hidden instead: it's the giant edge connector,
+               # self-evident without a label.
+               "J1"}
+
 nudged = 0
+hidden = 0
 for fp in board.GetFootprints():
     r = fp.GetReference()
     if r in OFFSETS:
@@ -42,6 +59,9 @@ for fp in board.GetFootprints():
         p = ref.GetPosition()
         ref.SetPosition(pcbnew.VECTOR2I(p.x + dx, p.y + dy))
         nudged += 1
+    if r in HIDDEN_REFS:
+        fp.Reference().SetVisible(False)
+        hidden += 1
 
 pcbnew.SaveBoard(f"{PROJECT_DIR}/supercart.kicad_pcb", board)
-print(f"nudged {nudged} reference labels, saved {PROJECT_DIR}/supercart.kicad_pcb")
+print(f"nudged {nudged} reference labels, hid {hidden}, saved {PROJECT_DIR}/supercart.kicad_pcb")

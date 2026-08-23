@@ -94,8 +94,10 @@ nets = {
     # hardware/TestBoard/EpyxFastLoad.kicad_pcb -- see gen_schematic.py's note.
     # J1 GAME_N/EXROM_N join VCC/GND too -- static 8K cartridge mode, decided
     # 2026-08-21, no Ultimax/mode-switching bootloader.
-    "VCC": [("J1", "2"), ("J1", "3"), ("J1", "8"), ("U1", "24"), ("U2", "44"), ("U2", "23"), ("C1", "1"), ("C2", "1"), ("R1", "1")],
-    "GND": [("J1", "1"), ("J1", "22"), ("J1", "9"), ("J1", "A"), ("J1", "Z"), ("U1", "12"), ("U2", "21"), ("U2", "22"), ("C1", "2"), ("C2", "2")],
+    "VCC": [("J1", "2"), ("J1", "3"), ("J1", "8"), ("U1", "24"), ("U2", "44"), ("U2", "23"), ("C1", "1"), ("C2", "1"), ("R1", "1"),
+            ("R2", "1"), ("R5", "1"), ("R6", "1"), ("R7", "1")],
+    "GND": [("J1", "1"), ("J1", "22"), ("J1", "9"), ("J1", "A"), ("J1", "Z"), ("U1", "12"), ("U2", "21"), ("U2", "22"), ("C1", "2"), ("C2", "2"),
+            ("LED1", "1"), ("LED2", "1"), ("LED3", "1"), ("Q1", "2"), ("Q2", "2")],
     "PHI2": [("J1", "E"), ("U1", "1")],
     "IO1_N": [("J1", "7"), ("U1", "10")],
     "RW": [("J1", "5"), ("U1", "11")],
@@ -132,10 +134,23 @@ nets = {
     # to match). /ROML drives Flash /CE directly, bypassing the GAL entirely.
     "ROML_N": [("J1", "11"), ("U2", "43")],
     "FLASH_OE_N": [("U1", "21"), ("U2", "29")],
-    "FLASH_WE_N": [("U1", "22"), ("U2", "30"), ("R1", "2")],  # + 10k pull-up to VCC (R1)
-    # still undefined in SUPER_CART_R01.PLD rev 0.2
-    "TBD_FLASH_RYBY_N": [("U2", "28")],
+    "FLASH_WE_N": [("U1", "22"), ("U2", "30"), ("R1", "2"), ("R3", "1")],  # + 10k pull-up to VCC (R1), + WRITE LED gate resistor (R3)
+    # RY/BY# (was TBD_FLASH_RYBY_N -- now real, 2026-08-23): open-drain per
+    # the datasheet ("dedicated, OPEN-DRAIN output pin"), R2 is its required
+    # pull-up -- nothing pulled this net up before, since it was unused.
+    "FLASH_RYBY_N": [("U2", "28"), ("R2", "2"), ("R4", "1")],
     "TBD_ROMH_N": [("J1", "B")],
+    # --- Status LEDs (PWR/WRITE/BUSY), added 2026-08-23 per user spec.
+    # See gen_schematic.py's own comment for the full circuit reasoning
+    # (2N7002s wired as shunts across each LED, not series switches --
+    # a series low-side switch driven directly by an active-low signal
+    # lights the LED when IDLE, backwards; verified against the truth
+    # table both ways before wiring). ---
+    "Q1_GATE": [("R3", "2"), ("Q1", "1")],
+    "WRITE_LED_A": [("R6", "2"), ("LED2", "2"), ("Q1", "3")],
+    "Q2_GATE": [("R4", "2"), ("Q2", "1")],
+    "BUSY_LED_A": [("R7", "2"), ("LED3", "2"), ("Q2", "3")],
+    "PWR_LED_A": [("R5", "2"), ("LED1", "2")],
 }
 
 # net number 0 is reserved by KiCad for "no net"
@@ -170,6 +185,10 @@ FP_FILES = {
         f"{FOOTPRINT_DIR}/Resistor_SMD.pretty/R_0805_2012Metric.kicad_mod",
     "MountingHole:MountingHole_3.2mm_M3":
         f"{FOOTPRINT_DIR}/MountingHole.pretty/MountingHole_3.2mm_M3.kicad_mod",
+    "Package_TO_SOT_SMD:SOT-23":
+        f"{FOOTPRINT_DIR}/Package_TO_SOT_SMD.pretty/SOT-23.kicad_mod",
+    "LED_SMD:LED_0805_2012Metric":
+        f"{FOOTPRINT_DIR}/LED_SMD.pretty/LED_0805_2012Metric.kicad_mod",
 }
 
 
@@ -274,23 +293,32 @@ u1 = load_footprint("Package_SO:SOIC-24W_7.5x15.4mm_P1.27mm", "U1", "ATF22V10C_S
 # above, and scripts/make_u2_horizontal_footprint.py) -- NOT the stock
 # Package_SO:SOP-44_13.3x28.2mm_P1.27mm, and NOT rotated.
 u2 = load_footprint("supercart:SOP-44_28.2x13.3mm_P1.27mm_HORIZ", "U2", "AM29F080B_SO44", U2_X, U2_Y, U2_ROT)
-# KiCad's own library never shipped a 3D model for this exact SOP-44 body
-# size at all (checked: no SOP-44_13.3x28.2mm_P1.27mm.step anywhere in the
-# install), so there's doubly no model for this custom-transposed variant.
-# Substituting the PSOP-44 model, rotated 90 to match our horizontal pad
-# layout, purely for a nicer 3D preview -- cosmetic only, doesn't touch
-# pads/copper/Gerbers. Its native body (16.9 x 27.17mm) is scaled down to
-# approximate our real (transposed) body (28.2 x 13.3mm); still an
-# approximation, not a real AM29F080B model.
+
+# U1/U2 3D bodies, replaced 2026-08-23 with custom models carrying real
+# laser-marking-style text (scripts/make_ic_body_with_marking.py) -- per
+# user request for visible chip info in 3D renders. Real KiCad text/Text-
+# node approaches don't work for this (verified, not assumed -- see that
+# script's own header): 2D footprint text never wraps onto a 3D model's
+# surface, and KiCad's VRML loader silently drops the VRML `Text` node.
+# U1 trades its real, accurately-modeled stock SOIC-24W body for a plainer
+# custom box to get the marking -- a real visual-fidelity tradeoff, made
+# with the user's explicit sign-off. U2 was ALREADY a distorted PSOP-44
+# substitute (no real SO-44 3D model exists anywhere in KiCad's library),
+# so this is a strict improvement there: real, undistorted 13.3x28.2mm
+# body instead of a non-uniformly-stretched approximation.
+# Scale 1/2.54 on all axes: KiCad's VRML importer treats raw model units
+# as 0.1in (2.54mm), a legacy convention confirmed empirically (a plain
+# 10-unit box rendered at ~25.3mm on a known 100mm board) -- the .wrl
+# files themselves are authored directly in real mm.
+u1.models[0].path = f"{PROJECT_DIR}/supercart.pretty/U1_ATF22V10C_marked.wrl"
+u1.models[0].scale.X = u1.models[0].scale.Y = u1.models[0].scale.Z = round(1 / 2.54, 6)
+u1.models[0].rotate.X = u1.models[0].rotate.Y = u1.models[0].rotate.Z = 0
+u1.models[0].pos.X = u1.models[0].pos.Y = u1.models[0].pos.Z = 0
 if u2.models:
-    u2.models[0].path = "${KICAD10_3DMODEL_DIR}/Package_SO.3dshapes/PSOP-44_16.9x27.17mm_P1.27mm.step"
-    # Scale is applied in the model's own native (pre-rotation) frame, so
-    # these stay mapped to native X/Y exactly as in the unrotated case --
-    # rotate.Z below is what actually reorients native-Y (27.17, scaled to
-    # 28.2) onto the horizontal global X axis.
-    u2.models[0].scale.X = round(13.3 / 16.9, 3)
-    u2.models[0].scale.Y = round(28.2 / 27.17, 3)
-    u2.models[0].rotate.Z = 90
+    u2.models[0].path = f"{PROJECT_DIR}/supercart.pretty/U2_AM29F080B_marked.wrl"
+    u2.models[0].scale.X = u2.models[0].scale.Y = u2.models[0].scale.Z = round(1 / 2.54, 6)
+    u2.models[0].rotate.X = u2.models[0].rotate.Y = u2.models[0].rotate.Z = 0
+    u2.models[0].pos.X = u2.models[0].pos.Y = u2.models[0].pos.Z = 0
 c1 = load_footprint("Capacitor_SMD:C_0805_2012Metric", "C1", "0.1uF", C1_X, C1_Y)
 c2 = load_footprint("Capacitor_SMD:C_0805_2012Metric", "C2", "0.1uF", C2_X, C2_Y)
 
@@ -300,6 +328,33 @@ r1 = load_footprint("Resistor_SMD:R_0805_2012Metric", "R1", "10k", R1_X, R1_Y)
 
 # No mounting holes -- removed 2026-08-22 per user's real layout (their
 # board doesn't have them). Previously MH1/MH2 sat at the top corners.
+
+# --- Status LEDs (PWR/WRITE/BUSY), added 2026-08-23 per user spec. ---
+# Placed in the one genuinely free strip of front copper on this board:
+# Y=33-48mm, full 58mm width, between the ICs/passives (bottom edge
+# ~Y=31mm) and J1's connector fingers (top edge ~Y=50.5mm) -- confirmed
+# empty by rendering the board before adding anything here, not assumed.
+# Real parts (verified against KiCad's own bundled libraries and, for
+# RY/BY#, the AM29F080B datasheet directly -- see gen_schematic.py's
+# header comment for the full circuit reasoning): 2N7002 N-channel
+# MOSFETs (SOT-23) wired as shunts across the WRITE/BUSY LEDs so their
+# gates never load FLASH_WE_N or RY/BY#; PWR is a plain always-on LED,
+# no transistor needed.
+Y_LED, Y_SUPPORT = 36.0, 42.0
+
+led1 = load_footprint("LED_SMD:LED_0805_2012Metric", "LED1", "LED_Green", 12.0, Y_LED)
+r5 = load_footprint("Resistor_SMD:R_0805_2012Metric", "R5", "2.2k", 12.0, Y_SUPPORT)
+
+led2 = load_footprint("LED_SMD:LED_0805_2012Metric", "LED2", "LED_Red", 27.0, Y_LED)
+q1 = load_footprint("Package_TO_SOT_SMD:SOT-23", "Q1", "2N7002", 27.0, Y_SUPPORT)
+r3 = load_footprint("Resistor_SMD:R_0805_2012Metric", "R3", "100", 22.0, Y_SUPPORT)
+r6 = load_footprint("Resistor_SMD:R_0805_2012Metric", "R6", "2.2k", 27.0, Y_SUPPORT + 5.0)
+
+led3 = load_footprint("LED_SMD:LED_0805_2012Metric", "LED3", "LED_Amber", 42.0, Y_LED)
+q2 = load_footprint("Package_TO_SOT_SMD:SOT-23", "Q2", "2N7002", 42.0, Y_SUPPORT)
+r4 = load_footprint("Resistor_SMD:R_0805_2012Metric", "R4", "100", 37.0, Y_SUPPORT)
+r7 = load_footprint("Resistor_SMD:R_0805_2012Metric", "R7", "2.2k", 42.0, Y_SUPPORT + 5.0)
+r2 = load_footprint("Resistor_SMD:R_0805_2012Metric", "R2", "10k", 49.0, Y_SUPPORT)  # RY/BY# pull-up
 
 # ShackMate logo on B.SilkS (back silkscreen), 2026-08-23. The front is
 # already full (header text, both ICs, passives, connector) but the back
@@ -320,15 +375,21 @@ r1 = load_footprint("Resistor_SMD:R_0805_2012Metric", "R1", "10k", R1_X, R1_Y)
 # lands around Y=40 -- comfortable clearance, not touching the connector
 # region at all).
 LOGO_X, LOGO_Y = BOARD_W / 2, 25.0
-# Empty ref/value on purpose: kiutils' Footprint.properties is a plain
-# string dict with no position/hide control (unlike a real KiCad-authored
-# property, which carries its own (at ...)/(hide yes)) -- a real
-# "LOGO1" reference rendered with no position override landed on F.SilkS
-# at the origin, overlapping U2's silkscreen. Empty strings still emit
-# valid (property "Reference" "") tokens, just with nothing to render.
-logo = load_footprint("supercart:SHACKMATE_LOGO", "", "", LOGO_X, LOGO_Y)
+# Real "LOGO1" reference (not empty): an empty Reference silently breaks
+# ExportSpecctraDSN for the WHOLE board (confirmed 2026-08-23 -- FreeRouting
+# routing failed with no error beyond "returned False" until every
+# footprint's GetReference() was checked and this one came back empty; see
+# export_dsn.py's own header for the earlier, different footprint that hit
+# the same failure mode). Kept invisible instead via scripts/fix_reference_
+# positions.py's real pcbnew SetVisible(False) -- kiutils' Footprint.
+# properties has no position/hide control (plain string dict only), so an
+# empty string was the only way to avoid the text bleeding onto F.SilkS
+# over U2 without that extra step; now that the DSN export needs a real
+# reference anyway, hiding it properly is the correct fix either way.
+logo = load_footprint("supercart:SHACKMATE_LOGO", "LOGO1", "ShackMate", LOGO_X, LOGO_Y)
 
-board.footprints = [j1, u1, u2, c1, c2, r1, logo]
+board.footprints = [j1, u1, u2, c1, c2, r1, logo,
+                     led1, led2, led3, q1, q2, r2, r3, r4, r5, r6, r7]
 
 # Board outline: exact shape traced from hardware/TestBoard/EpyxFastLoad.kicad_pcb
 # (real board, per user request 2026-08-21) -- NOT rounded corners (an earlier
