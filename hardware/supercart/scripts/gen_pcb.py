@@ -162,6 +162,8 @@ FP_FILES = {
         f"{PROJECT_DIR}/supercart.pretty/C64_EDGE_CONNECTOR_44.kicad_mod",
     "supercart:SOP-44_28.2x13.3mm_P1.27mm_HORIZ":
         f"{PROJECT_DIR}/supercart.pretty/SOP-44_28.2x13.3mm_P1.27mm_HORIZ.kicad_mod",
+    "supercart:SHACKMATE_LOGO":
+        f"{PROJECT_DIR}/supercart.pretty/SHACKMATE_LOGO.kicad_mod",
     "Capacitor_SMD:C_0805_2012Metric":
         f"{FOOTPRINT_DIR}/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod",
     "Resistor_SMD:R_0805_2012Metric":
@@ -299,7 +301,34 @@ r1 = load_footprint("Resistor_SMD:R_0805_2012Metric", "R1", "10k", R1_X, R1_Y)
 # No mounting holes -- removed 2026-08-22 per user's real layout (their
 # board doesn't have them). Previously MH1/MH2 sat at the top corners.
 
-board.footprints = [j1, u1, u2, c1, c2, r1]
+# ShackMate logo on B.SilkS (back silkscreen), 2026-08-23. The front is
+# already full (header text, both ICs, passives, connector) but the back
+# is completely empty (verified: only the layer-stackup declaration for
+# B.SilkS existed in supercart.kicad_pcb before this, zero content), so
+# the logo goes there at full size (icon + wordmark + tagline, nothing
+# cropped) instead of being squeezed/simplified to fit front leftovers.
+# Built by scripts/make_shackmate_logo_footprint.py (potrace + shapely/
+# earcut hole-aware triangulation, not KiCad's own bitmap2component --
+# see that script's header for why: bitmap2component turned out to be
+# GUI-only in this KiCad 10 build, no real headless batch mode found).
+# The footprint's own polygon coordinates are pre-mirrored (X negated)
+# to match KiCad's back-layer convention -- confirmed by rendering an
+# un-mirrored first attempt with `kicad-cli pcb render --side bottom`
+# and seeing the wordmark come out backwards before this fix.
+# Centered horizontally; vertically centered in the free area above the
+# connector fingers (J1 pads start around Y=50.5, logo bottom edge here
+# lands around Y=40 -- comfortable clearance, not touching the connector
+# region at all).
+LOGO_X, LOGO_Y = BOARD_W / 2, 25.0
+# Empty ref/value on purpose: kiutils' Footprint.properties is a plain
+# string dict with no position/hide control (unlike a real KiCad-authored
+# property, which carries its own (at ...)/(hide yes)) -- a real
+# "LOGO1" reference rendered with no position override landed on F.SilkS
+# at the origin, overlapping U2's silkscreen. Empty strings still emit
+# valid (property "Reference" "") tokens, just with nothing to render.
+logo = load_footprint("supercart:SHACKMATE_LOGO", "", "", LOGO_X, LOGO_Y)
+
+board.footprints = [j1, u1, u2, c1, c2, r1, logo]
 
 # Board outline: exact shape traced from hardware/TestBoard/EpyxFastLoad.kicad_pcb
 # (real board, per user request 2026-08-21) -- NOT rounded corners (an earlier
