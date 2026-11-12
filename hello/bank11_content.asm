@@ -140,6 +140,9 @@ HttpGetCmd
         lda     #>httpget_end
         sta     ult_ptr+1
         jsr     hg_append             ; "\r\n\r\n"
+        lda     #$00                  ; hg_append doesn't terminate; without this
+        sta     dir_buffer,x          ; ult_cmd_str sends whatever stale bytes
+                                        ; follow the request in dir_buffer
 
         lda     #ULT_TGT_NET
         ldx     #ULT_NET_SOCK_WRITE
