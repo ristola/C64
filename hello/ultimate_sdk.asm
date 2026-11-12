@@ -261,6 +261,39 @@ ult_accept_wait
         bne     ult_accept_wait
         rts
 
+; --- Wall-clock timeout on the CIA1 time-of-day clock ---
+; The KERNAL jiffy clock does not advance while a bank visit runs with
+; interrupts off, and a retry count is not a time: an empty READ takes
+; whatever the firmware makes it take (0 ms up to 4 s). The TOD clock
+; needs no IRQ. Whole seconds only, so the limit is ULT_TOD_LIMIT-1 to
+; ULT_TOD_LIMIT seconds. Uses ult_reqlen as scratch. Call with IRQs off.
+ULT_TOD_LIMIT = $05      ; BCD seconds
+
+; Start the clock if it is halted and remember the current second.
+ult_tod_start
+        lda     $dc0f
+        and     #$7f                  ; writes set the clock, not the alarm
+        sta     $dc0f
+        lda     #$00
+        sta     $dc08                 ; writing the tenths (re)starts it
+        lda     $dc09
+        sta     ult_reqlen
+        rts
+
+; C set when ULT_TOD_LIMIT seconds or more have passed since the start.
+ult_tod_expired
+        lda     $dc08                 ; tenths first: never latch hours
+        lda     $dc09
+        sed
+        sec
+        sbc     ult_reqlen
+        bcs     +
+        sec
+        sbc     #$40                  ; minute wrapped: 100-x -> 60-x
++       cld
+        cmp     #ULT_TOD_LIMIT
+        rts
+
 ; ============================================================
 ; High-level API
 ; ============================================================

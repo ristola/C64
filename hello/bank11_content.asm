@@ -107,7 +107,7 @@ HttpGetCmd
         lda     #$00
         sta     filename2_buf,y
 
-        jsr     net_tcp_connect       ; -> ult_tmp = socket handle
+        jsr     net_tcp_connect       ; -> telnet_sock = socket handle
 
         ; Build the request line-by-piece into dir_buffer via hg_append
         ldx     #$00
@@ -140,11 +140,14 @@ HttpGetCmd
         lda     #>httpget_end
         sta     ult_ptr+1
         jsr     hg_append             ; "\r\n\r\n"
+        lda     #$00                  ; hg_append doesn't terminate; without this
+        sta     dir_buffer,x          ; ult_cmd_str sends whatever stale bytes
+                                        ; follow the request in dir_buffer
 
         lda     #ULT_TGT_NET
         ldx     #ULT_NET_SOCK_WRITE
         jsr     ult_cmd_start
-        lda     ult_tmp               ; socket handle
+        lda     telnet_sock           ; socket handle
         jsr     ult_cmd_byte
         lda     #<dir_buffer
         sta     ult_ptr
@@ -158,11 +161,13 @@ HttpGetCmd
 +                                       ; direct BNE from here.
         jsr     ult_read_data
         jsr     ult_accept
+        jsr     ult_tod_start         ; the reply is waited for by time
 
+hg_read_try
         lda     #ULT_TGT_NET
         ldx     #ULT_NET_SOCK_READ
         jsr     ult_cmd_start
-        lda     ult_tmp               ; socket handle
+        lda     telnet_sock           ; socket handle
         jsr     ult_cmd_byte
         lda     #<512
         jsr     ult_cmd_byte          ; requested length, lo/hi
@@ -180,6 +185,18 @@ HttpGetCmd
         sta     ult_outptr+1
         jsr     ult_read_data
         jsr     ult_accept
+
+        ; An empty READ can answer at once with length $FFFF (status 02,
+        ; no data). Ask again until data arrives or ULT_TOD_LIMIT seconds
+        ; have passed; do not rely on READ waiting for the server.
+        lda     dir_buffer
+        and     dir_buffer+1
+        cmp     #$ff
+        bne     hg_have_data
+        jsr     ult_tod_expired
+        bcs     hg_have_data
+        jmp     hg_read_try
+hg_have_data
 
         ; NET_CMD_READ_SOCKET's response starts with a 2-byte length
         ; header (LSB first) BEFORE the actual data (confirmed against
@@ -268,9 +285,7 @@ TelnetCmd
         lda     $15
         sta     net_port+1
 
-        jsr     net_tcp_connect       ; -> ult_tmp = socket handle
-        lda     ult_tmp
-        sta     telnet_sock
+        jsr     net_tcp_connect       ; -> telnet_sock = socket handle
 
         cli                           ; OkExt's SEI (resident.asm) holds
                                         ; interrupts off for the whole bank
@@ -374,7 +389,8 @@ telnet_hdr
         !byte   13,0
 
 ; --- Shared: open a TCP connection to filename_buf:net_port.
-; Result: ult_tmp = 1-byte socket handle. ---
+; Result: telnet_sock = 1-byte socket handle (HTTPGET and TELNET both
+; use it; ult_tmp can't hold it, every ult_read_* overwrites that). ---
 net_tcp_connect
         lda     #ULT_TGT_NET
         ldx     #ULT_NET_TCP_CONNECT
@@ -405,9 +421,9 @@ net_tcp_connect
         sta     ult_outptr+1
         jsr     ult_read_data          ; response = 1-byte socket handle
         lda     dir_buffer
-        sta     ult_tmp
-        jsr     ult_read_status
-        jmp     ult_accept
+        sta     telnet_sock           ; ult_read_status ends with sty ult_tmp
+        jsr     ult_read_status       ; (the status byte count, 5 for
+        jmp     ult_accept            ; "00,OK"), so ult_tmp can't keep it
 
 ; Parses a double-quoted string literal starting at the current BASIC
 ; text position into (ult_outptr), up to FILENAME_MAXLEN chars, leaving
