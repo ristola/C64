@@ -166,3 +166,11 @@ stub_http_body
         !byte   13,10
 stub_http_body_end
 STUB_TOTAL_LEN = stub_http_body_end - stub_http_response
+
+; Wall-clock timeout helpers: the stub never returns an empty READ, so
+; the retry loop in HttpGetCmd never needs them to count.
+ult_tod_start
+        rts
+ult_tod_expired
+        sec
+        rts

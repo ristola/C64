@@ -158,7 +158,9 @@ HttpGetCmd
 +                                       ; direct BNE from here.
         jsr     ult_read_data
         jsr     ult_accept
+        jsr     ult_tod_start         ; the reply is waited for by time
 
+hg_read_try
         lda     #ULT_TGT_NET
         ldx     #ULT_NET_SOCK_READ
         jsr     ult_cmd_start
@@ -180,6 +182,18 @@ HttpGetCmd
         sta     ult_outptr+1
         jsr     ult_read_data
         jsr     ult_accept
+
+        ; An empty READ can answer at once with length $FFFF (status 02,
+        ; no data). Ask again until data arrives or ULT_TOD_LIMIT seconds
+        ; have passed; do not rely on READ waiting for the server.
+        lda     dir_buffer
+        and     dir_buffer+1
+        cmp     #$ff
+        bne     hg_have_data
+        jsr     ult_tod_expired
+        bcs     hg_have_data
+        jmp     hg_read_try
+hg_have_data
 
         ; NET_CMD_READ_SOCKET's response starts with a 2-byte length
         ; header (LSB first) BEFORE the actual data (confirmed against
