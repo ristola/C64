@@ -107,7 +107,7 @@ HttpGetCmd
         lda     #$00
         sta     filename2_buf,y
 
-        jsr     net_tcp_connect       ; -> ult_tmp = socket handle
+        jsr     net_tcp_connect       ; -> telnet_sock = socket handle
 
         ; Build the request line-by-piece into dir_buffer via hg_append
         ldx     #$00
@@ -144,7 +144,7 @@ HttpGetCmd
         lda     #ULT_TGT_NET
         ldx     #ULT_NET_SOCK_WRITE
         jsr     ult_cmd_start
-        lda     ult_tmp               ; socket handle
+        lda     telnet_sock           ; socket handle
         jsr     ult_cmd_byte
         lda     #<dir_buffer
         sta     ult_ptr
@@ -162,7 +162,7 @@ HttpGetCmd
         lda     #ULT_TGT_NET
         ldx     #ULT_NET_SOCK_READ
         jsr     ult_cmd_start
-        lda     ult_tmp               ; socket handle
+        lda     telnet_sock           ; socket handle
         jsr     ult_cmd_byte
         lda     #<512
         jsr     ult_cmd_byte          ; requested length, lo/hi
@@ -268,9 +268,7 @@ TelnetCmd
         lda     $15
         sta     net_port+1
 
-        jsr     net_tcp_connect       ; -> ult_tmp = socket handle
-        lda     ult_tmp
-        sta     telnet_sock
+        jsr     net_tcp_connect       ; -> telnet_sock = socket handle
 
         cli                           ; OkExt's SEI (resident.asm) holds
                                         ; interrupts off for the whole bank
@@ -374,7 +372,8 @@ telnet_hdr
         !byte   13,0
 
 ; --- Shared: open a TCP connection to filename_buf:net_port.
-; Result: ult_tmp = 1-byte socket handle. ---
+; Result: telnet_sock = 1-byte socket handle (HTTPGET and TELNET both
+; use it; ult_tmp can't hold it, every ult_read_* overwrites that). ---
 net_tcp_connect
         lda     #ULT_TGT_NET
         ldx     #ULT_NET_TCP_CONNECT
@@ -405,9 +404,9 @@ net_tcp_connect
         sta     ult_outptr+1
         jsr     ult_read_data          ; response = 1-byte socket handle
         lda     dir_buffer
-        sta     ult_tmp
-        jsr     ult_read_status
-        jmp     ult_accept
+        sta     telnet_sock           ; ult_read_status ends with sty ult_tmp
+        jsr     ult_read_status       ; (the status byte count, 5 for
+        jmp     ult_accept            ; "00,OK"), so ult_tmp can't keep it
 
 ; Parses a double-quoted string literal starting at the current BASIC
 ; text position into (ult_outptr), up to FILENAME_MAXLEN chars, leaving
